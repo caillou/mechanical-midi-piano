@@ -17,12 +17,16 @@
  *   3. Sequential channel cycling
  *   4. All-channels simultaneous test
  *   5. Interactive serial commands
+ *   6. SOS morse code solenoid test
  *
  * Serial Commands:
  *   'r' - Re-run all tests
  *   'a' - Activate all channels simultaneously
  *   's' - Run I2C scanner only
  *   '0'-'7' - Toggle individual channel
+ *   'o' - Run single SOS sequence on Channel 0
+ *   'c' - Toggle continuous SOS mode
+ *   'x' - Emergency stop (all off + stop SOS)
  *   'h' - Show help menu
  *
  * @author Mechanical MIDI Piano Project
@@ -85,6 +89,31 @@ constexpr uint32_t TEST_DELAY_MS = 200;
 /** @} */
 
 /**
+ * @defgroup SOSConfig SOS Morse Code Configuration
+ * @{
+ */
+
+/** SOS test channel (GPA0) */
+constexpr uint8_t SOS_CHANNEL = 0;
+
+/** Dit (dot) duration in milliseconds - 1 unit */
+constexpr uint32_t SOS_DIT_MS = 100;
+
+/** Dah (dash) duration in milliseconds - 3 units */
+constexpr uint32_t SOS_DAH_MS = 300;
+
+/** Gap between elements (dits/dahs) within a letter - 1 unit */
+constexpr uint32_t SOS_ELEMENT_GAP_MS = 100;
+
+/** Gap between letters - 3 units (actually 2 additional after element gap) */
+constexpr uint32_t SOS_LETTER_GAP_MS = 300;
+
+/** Gap between words/SOS repetitions - 7 units */
+constexpr uint32_t SOS_WORD_GAP_MS = 700;
+
+/** @} */
+
+/**
  * @defgroup Pins Pin Definitions
  * @{
  */
@@ -142,6 +171,9 @@ uint32_t channelOnTime[NUM_CHANNELS] = {0};
 /** Timestamp when each channel was last turned off (for cooldown enforcement) */
 uint32_t channelOffTime[NUM_CHANNELS] = {0};
 
+/** Flag for continuous SOS mode */
+volatile bool sosRunning = false;
+
 // =============================================================================
 // FUNCTION PROTOTYPES
 // =============================================================================
@@ -172,6 +204,14 @@ void testCommunication();
 void printSeparator();
 void printHelp();
 void handleSerialInput();
+
+// SOS Morse Code Functions
+void playDit();
+void playDah();
+void playS();
+void playO();
+void playSOS();
+void stopSOS();
 
 // =============================================================================
 // SETUP
@@ -252,6 +292,14 @@ void loop() {
                     setChannel(i, false);
                 }
             }
+        }
+    }
+
+    // Continuous SOS mode
+    if (sosRunning && mcpInitialized) {
+        playSOS();
+        if (sosRunning) {  // Check again in case stopped during playSOS
+            delay(SOS_WORD_GAP_MS);  // Gap between repetitions
         }
     }
 
@@ -712,6 +760,166 @@ void testAllChannelsSimultaneous() {
 }
 
 // =============================================================================
+// SOS MORSE CODE FUNCTIONS
+// =============================================================================
+
+/**
+ * @brief Play a single dit (dot) - short pulse
+ *
+ * Activates SOS_CHANNEL for SOS_DIT_MS (100ms).
+ * This is a blocking function.
+ */
+void playDit() {
+    if (!mcpInitialized || !sosRunning) return;
+
+    digitalWrite(LED_PIN, HIGH);
+    mcp.digitalWrite(SOS_CHANNEL, HIGH);
+    delay(SOS_DIT_MS);
+    mcp.digitalWrite(SOS_CHANNEL, LOW);
+    digitalWrite(LED_PIN, LOW);
+}
+
+/**
+ * @brief Play a single dah (dash) - long pulse
+ *
+ * Activates SOS_CHANNEL for SOS_DAH_MS (300ms).
+ * This is a blocking function.
+ */
+void playDah() {
+    if (!mcpInitialized || !sosRunning) return;
+
+    digitalWrite(LED_PIN, HIGH);
+    mcp.digitalWrite(SOS_CHANNEL, HIGH);
+    delay(SOS_DAH_MS);
+    mcp.digitalWrite(SOS_CHANNEL, LOW);
+    digitalWrite(LED_PIN, LOW);
+}
+
+/**
+ * @brief Play the letter 'S' in morse code (. . .)
+ *
+ * Three dits with element gaps between them.
+ * Pattern: dit-gap-dit-gap-dit
+ */
+void playS() {
+    if (!sosRunning) return;
+
+    // First dit
+    playDit();
+    if (!sosRunning) return;
+    delay(SOS_ELEMENT_GAP_MS);
+
+    // Second dit
+    playDit();
+    if (!sosRunning) return;
+    delay(SOS_ELEMENT_GAP_MS);
+
+    // Third dit
+    playDit();
+}
+
+/**
+ * @brief Play the letter 'O' in morse code (- - -)
+ *
+ * Three dahs with element gaps between them.
+ * Pattern: dah-gap-dah-gap-dah
+ */
+void playO() {
+    if (!sosRunning) return;
+
+    // First dah
+    playDah();
+    if (!sosRunning) return;
+    delay(SOS_ELEMENT_GAP_MS);
+
+    // Second dah
+    playDah();
+    if (!sosRunning) return;
+    delay(SOS_ELEMENT_GAP_MS);
+
+    // Third dah
+    playDah();
+}
+
+/**
+ * @brief Play complete SOS sequence
+ *
+ * Plays S-O-S with proper letter gaps.
+ * Pattern: S (letter gap) O (letter gap) S
+ *
+ * Timing breakdown:
+ *   S = dit(100) + gap(100) + dit(100) + gap(100) + dit(100) = 500ms
+ *   Letter gap = 300ms (but 100ms of element gap consumed) = 200ms additional
+ *   O = dah(300) + gap(100) + dah(300) + gap(100) + dah(300) = 1100ms
+ *   Letter gap = 200ms additional
+ *   S = 500ms
+ *   Total active time: ~2700ms
+ */
+void playSOS() {
+    if (!mcpInitialized) {
+        Serial.println(F("[ERROR] Cannot play SOS - MCP23017 not initialized"));
+        return;
+    }
+
+    Serial.println(F("Playing SOS: ... --- ..."));
+
+    // Ensure channel starts OFF
+    mcp.digitalWrite(SOS_CHANNEL, LOW);
+
+    // Play 'S' (. . .)
+    playS();
+    if (!sosRunning) {
+        mcp.digitalWrite(SOS_CHANNEL, LOW);
+        return;
+    }
+
+    // Letter gap between S and O (300ms total, minus element gap already taken)
+    delay(SOS_LETTER_GAP_MS - SOS_ELEMENT_GAP_MS);
+    if (!sosRunning) {
+        mcp.digitalWrite(SOS_CHANNEL, LOW);
+        return;
+    }
+
+    // Play 'O' (- - -)
+    playO();
+    if (!sosRunning) {
+        mcp.digitalWrite(SOS_CHANNEL, LOW);
+        return;
+    }
+
+    // Letter gap between O and S
+    delay(SOS_LETTER_GAP_MS - SOS_ELEMENT_GAP_MS);
+    if (!sosRunning) {
+        mcp.digitalWrite(SOS_CHANNEL, LOW);
+        return;
+    }
+
+    // Play 'S' (. . .)
+    playS();
+
+    // Ensure channel ends OFF
+    mcp.digitalWrite(SOS_CHANNEL, LOW);
+    digitalWrite(LED_PIN, LOW);
+
+    Serial.println(F("SOS complete."));
+}
+
+/**
+ * @brief Stop SOS playback immediately
+ *
+ * Sets sosRunning flag to false and ensures channel is OFF.
+ * Called by emergency stop and continuous mode toggle.
+ */
+void stopSOS() {
+    sosRunning = false;
+    if (mcpInitialized) {
+        mcp.digitalWrite(SOS_CHANNEL, LOW);
+    }
+    digitalWrite(LED_PIN, LOW);
+    Serial.println(F("[OK] SOS stopped"));
+}
+
+// =============================================================================
 // UTILITY FUNCTIONS
 // =============================================================================
 
@@ -731,7 +939,9 @@ void printHelp() {
     Serial.println(F("  'a' - Activate all channels for 100ms"));
     Serial.println(F("  's' - Run I2C scanner"));
     Serial.println(F("  '0'-'7' - Toggle individual channel"));
-    Serial.println(F("  'x' - Emergency stop (all off)"));
+    Serial.println(F("  'o' - Run single SOS sequence (Channel 0)"));
+    Serial.println(F("  'c' - Toggle continuous SOS mode"));
+    Serial.println(F("  'x' - Emergency stop (all off + stop SOS)"));
     Serial.println(F("  'h' - Show this help menu"));
     Serial.println();
     Serial.println(F("Waiting for commands..."));
@@ -790,9 +1000,34 @@ void handleSerialInput() {
                 break;
             }
 
+            case 'o':
+            case 'O':
+                if (!sosRunning) {
+                    Serial.println(F("Running single SOS sequence..."));
+                    sosRunning = true;  // Enable for this sequence
+                    playSOS();
+                    sosRunning = false;  // Disable after completion
+                } else {
+                    Serial.println(F("[INFO] SOS already running"));
+                }
+                break;
+
+            case 'c':
+            case 'C':
+                if (sosRunning) {
+                    Serial.println(F("Stopping continuous SOS mode..."));
+                    stopSOS();
+                } else {
+                    Serial.println(F("Starting continuous SOS mode..."));
+                    Serial.println(F("Press 'x' or 'c' to stop."));
+                    sosRunning = true;
+                }
+                break;
+
             case 'x':
             case 'X':
                 Serial.println(F("EMERGENCY STOP"));
+                stopSOS();  // Stop SOS first
                 deactivateAllChannels();
                 break;
 
