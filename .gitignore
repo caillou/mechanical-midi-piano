@@ -1,0 +1,13 @@
+# PlatformIO build artifacts
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# VSCode PlatformIO settings
+.vscode/
+
+# macOS
+.DS_Store
+
+# Plan file
+PLAN.md
