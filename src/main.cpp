@@ -172,7 +172,7 @@ uint32_t channelOnTime[NUM_CHANNELS] = {0};
 uint32_t channelOffTime[NUM_CHANNELS] = {0};
 
 /** Flag for continuous SOS mode */
-volatile bool sosRunning = false;
+volatile bool sosRunning = true;
 
 // =============================================================================
 // FUNCTION PROTOTYPES
