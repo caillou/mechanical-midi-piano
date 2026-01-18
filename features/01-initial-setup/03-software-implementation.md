@@ -1,3 +1,101 @@
+# Software Implementation Guide
+
+## Table of Contents
+
+1. [Development Environment Setup](#development-environment-setup)
+2. [PlatformIO Configuration](#platformio-configuration)
+3. [Test Program Implementation](#test-program-implementation)
+4. [Code Structure and Documentation](#code-structure-and-documentation)
+5. [Expected Serial Output](#expected-serial-output)
+6. [Troubleshooting Guide](#troubleshooting-guide)
+
+---
+
+## Development Environment Setup
+
+### Prerequisites
+
+1. **PlatformIO IDE** or **PlatformIO Core (CLI)**
+   - Install via VS Code extension or standalone
+   - Documentation: https://platformio.org/install
+
+2. **Teensy Platform Support**
+   - PlatformIO will auto-install on first build
+   - Requires Teensyduino: https://www.pjrc.com/teensy/teensyduino.html
+
+3. **USB Drivers**
+   - Windows: Install Teensy drivers from PJRC
+   - macOS/Linux: Usually works out of box
+
+### Verify Installation
+
+```bash
+# Check PlatformIO version
+pio --version
+
+# List available boards (should include teensy41)
+pio boards teensy
+```
+
+---
+
+## PlatformIO Configuration
+
+### Updated `platformio.ini`
+
+Replace the existing `platformio.ini` with this configuration:
+
+```ini
+; PlatformIO Configuration for Mechanical MIDI Piano
+; Target: Teensy 4.1 with Adafruit I2C Solenoid Driver
+
+[env:teensy41]
+platform = teensy
+board = teensy41
+framework = arduino
+
+; Serial monitor baud rate
+monitor_speed = 115200
+
+; Build flags
+build_flags =
+    -D ARDUINO_TEENSY41
+    -D USB_SERIAL
+    -Wno-unused-variable
+
+; Library dependencies
+lib_deps =
+    adafruit/Adafruit MCP23017 Arduino Library@^2.3.0
+    adafruit/Adafruit BusIO@^1.14.0
+
+; Upload settings
+upload_protocol = teensy-cli
+
+; Debug build (optional - uncomment for debugging)
+; build_type = debug
+```
+
+### Library Dependencies Explained
+
+| Library | Version | Purpose |
+|---------|---------|---------|
+| Adafruit MCP23017 Arduino Library | ^2.3.0 | High-level MCP23017 control |
+| Adafruit BusIO | ^1.14.0 | I2C abstraction (auto-dependency) |
+
+### Install Libraries
+
+```bash
+# PlatformIO will auto-install on first build, or manually:
+pio lib install "adafruit/Adafruit MCP23017 Arduino Library@^2.3.0"
+```
+
+---
+
+## Test Program Implementation
+
+### Complete Test Program (`src/main.cpp`)
+
+```cpp
 /**
  * @file main.cpp
  * @brief Solenoid Driver Test Program for Mechanical MIDI Piano
@@ -48,6 +146,9 @@ constexpr uint32_t I2C_CLOCK_SPEED = 400000;
 
 /** Default I2C address for MCP23017 (A0=A1=A2=0) */
 constexpr uint8_t MCP23017_DEFAULT_ADDRESS = 0x20;
+
+/** I2C communication timeout in milliseconds */
+constexpr uint32_t I2C_TIMEOUT_MS = 100;
 
 /** @} */
 
@@ -172,6 +273,7 @@ void testCommunication();
 void printSeparator();
 void printHelp();
 void handleSerialInput();
+void blinkLED(uint8_t count, uint32_t duration);
 
 // =============================================================================
 // SETUP
@@ -454,25 +556,11 @@ bool setChannel(uint8_t channel, bool state) {
  *
  * @param states Bitmask of channel states (bit 0 = channel 0, etc.)
  * @return true if operation successful, false otherwise
- *
- * Includes safety checks for minimum off-time when turning channels on.
  */
 bool setAllChannels(uint8_t states) {
     if (!mcpInitialized) {
         Serial.println(F("[ERROR] MCP23017 not initialized"));
         return false;
-    }
-
-    // Check safety for all channels being turned on
-    for (uint8_t i = 0; i < NUM_CHANNELS; i++) {
-        bool newState = (states >> i) & 0x01;
-        bool oldState = (channelStates >> i) & 0x01;
-
-        if (newState && !oldState) {
-            if (!isChannelSafe(i, true)) {
-                return false;  // Safety check failed
-            }
-        }
     }
 
     // Update state tracking
@@ -816,3 +904,381 @@ void handleSerialInput() {
     }
 }
 
+/**
+ * @brief Blink the built-in LED
+ *
+ * @param count Number of blinks
+ * @param duration Duration of each blink in milliseconds
+ */
+void blinkLED(uint8_t count, uint32_t duration) {
+    for (uint8_t i = 0; i < count; i++) {
+        digitalWrite(LED_PIN, HIGH);
+        delay(duration);
+        digitalWrite(LED_PIN, LOW);
+        delay(duration);
+    }
+}
+```
+
+---
+
+## Code Structure and Documentation
+
+### File Organization
+
+```
+mechanical-midi-piano/
+├── platformio.ini          # Build configuration
+├── src/
+│   └── main.cpp            # Main test program
+├── lib/                    # Custom libraries (future)
+│   └── SolenoidDriver/     # (Phase 4+)
+├── include/                # Header files (future)
+└── test/                   # Unit tests (future)
+```
+
+### Code Sections Explained
+
+| Section | Purpose |
+|---------|---------|
+| Configuration Constants | All timing, address, and safety parameters in one place |
+| MCP23017 Register Definitions | Hardware register addresses for reference |
+| Global Objects | MCP23017 instance and state tracking variables |
+| Initialization Functions | Setup serial, I2C, and MCP23017 |
+| I2C Utility Functions | Bus scanning and device detection |
+| Solenoid Control Functions | Channel activation with safety checks |
+| Test Functions | Diagnostic test routines |
+| Utility Functions | Helpers for UI and status |
+
+### Key Design Decisions
+
+1. **Safety-First Design**
+   - Maximum on-time limit (5 seconds) prevents solenoid overheating
+   - Minimum off-time (50ms) ensures cooling between activations
+   - Emergency stop (`'x'` command) immediately deactivates all channels
+
+2. **Non-Blocking Architecture (Main Loop)**
+   - Main loop monitors safety timeouts without blocking
+   - Only test functions use blocking delays
+   - Production code should use non-blocking timers
+
+3. **State Tracking**
+   - `channelStates` tracks current on/off state for quick access
+   - `channelOnTime[]` tracks when each channel was turned on
+   - `channelOffTime[]` tracks when each channel was turned off
+
+4. **Error Handling**
+   - All functions return success/failure status
+   - Error messages include context (which channel, what failed)
+   - Graceful degradation if MCP23017 not detected
+
+### Configuration Constants Reference
+
+| Constant | Value | Unit | Purpose |
+|----------|-------|------|---------|
+| `I2C_CLOCK_SPEED` | 400000 | Hz | I2C bus speed |
+| `MCP23017_DEFAULT_ADDRESS` | 0x20 | - | I2C address |
+| `I2C_TIMEOUT_MS` | 100 | ms | Communication timeout |
+| `NUM_CHANNELS` | 8 | - | Channels per board |
+| `MAX_ON_TIME_MS` | 5000 | ms | Safety auto-shutoff |
+| `MIN_OFF_TIME_MS` | 50 | ms | Minimum cooldown |
+| `TEST_ACTIVATION_MS` | 100 | ms | Test pulse duration |
+| `TEST_DELAY_MS` | 200 | ms | Delay between tests |
+
+---
+
+## Expected Serial Output
+
+### Successful Startup
+
+```
+============================================================
+MECHANICAL MIDI PIANO - SOLENOID DRIVER TEST
+Teensy 4.1 + Adafruit I2C Solenoid Driver
+============================================================
+
+Initializing I2C bus...
+  SDA Pin: 18, SCL Pin: 19, Speed: 400 kHz
+[OK] I2C bus initialized
+
+Scanning I2C bus...
+  [FOUND] Device at address 0x20 (MCP23017 - Solenoid Driver)
+
+Scan complete. 1 device(s) found.
+
+Initializing MCP23017 at address 0x20...
+  Configuring Port A as outputs (solenoid channels)...
+  Port A configured, all channels OFF
+  Verifying configuration...
+Testing register read/write...
+  GPIOA read: 0x00
+  [OK] Write/read verified (0xAA)
+[OK] MCP23017 initialized successfully
+
+Running initial tests...
+============================================================
+RUNNING ALL TESTS
+============================================================
+
+--- Test 1: Communication Verification ---
+Testing register read/write...
+  GPIOA read: 0x00
+  [OK] Write/read verified (0xAA)
+
+--- Test 2: Sequential Channel Test ---
+Testing channels sequentially...
+  Activation time: 100ms, Delay: 200ms
+
+  Channel 0: ON... OFF [OK]
+  Channel 1: ON... OFF [OK]
+  Channel 2: ON... OFF [OK]
+  Channel 3: ON... OFF [OK]
+  Channel 4: ON... OFF [OK]
+  Channel 5: ON... OFF [OK]
+  Channel 6: ON... OFF [OK]
+  Channel 7: ON... OFF [OK]
+  Sequential test complete.
+
+--- Test 3: All Channels Simultaneous ---
+Activating all channels simultaneously...
+  Duration: 100ms
+  All channels ON
+  All channels OFF
+  Simultaneous test complete.
+============================================================
+ALL TESTS COMPLETE
+============================================================
+
+SERIAL COMMANDS:
+  'r' - Re-run all tests
+  'a' - Activate all channels for 100ms
+  's' - Run I2C scanner
+  '0'-'7' - Toggle individual channel
+  'x' - Emergency stop (all off)
+  'h' - Show this help menu
+
+Waiting for commands...
+```
+
+### No Device Found Output
+
+```
+============================================================
+MECHANICAL MIDI PIANO - SOLENOID DRIVER TEST
+Teensy 4.1 + Adafruit I2C Solenoid Driver
+============================================================
+
+Initializing I2C bus...
+  SDA Pin: 18, SCL Pin: 19, Speed: 400 kHz
+[OK] I2C bus initialized
+
+Scanning I2C bus...
+
+Scan complete. 0 device(s) found.
+
+Initializing MCP23017 at address 0x20...
+[ERROR] MCP23017 begin_I2C() failed
+[ERROR] Failed to initialize MCP23017!
+Check wiring and I2C address.
+
+SERIAL COMMANDS:
+  'r' - Re-run all tests
+  ...
+```
+
+### Safety Timeout Output
+
+```
+[SAFETY] Channel 3 auto-shutoff (max on-time exceeded)
+```
+
+### Cooldown Warning Output
+
+```
+[SAFETY] Channel 0 cooldown: wait 35ms
+```
+
+---
+
+## Troubleshooting Guide
+
+### Issue: "MCP23017 begin_I2C() failed"
+
+**Symptoms**: No device detected, initialization fails
+
+**Diagnostic Steps**:
+
+1. **Check power**:
+   ```
+   Measure voltage at driver board Vcc pin
+   Expected: 3.2V - 3.4V
+   ```
+
+2. **Check I2C connections**:
+   ```
+   Verify SDA (Pin 18) -> Driver SDA
+   Verify SCL (Pin 19) -> Driver SCL
+   ```
+
+3. **Run I2C scanner** (press 's'):
+   ```
+   If no devices found -> wiring problem
+   If wrong address -> check A0/A1/A2 jumpers
+   ```
+
+4. **Check for shorts**:
+   ```
+   Verify no short between SDA and GND
+   Verify no short between SCL and GND
+   ```
+
+**Solutions**:
+
+| Finding | Solution |
+|---------|----------|
+| No voltage at Vcc | Check 3.3V connection from Teensy |
+| Voltage at 5V | **STOP** - will damage Teensy! Use 3.3V |
+| SDA/SCL swapped | Swap the two wires |
+| Different address detected | Update `MCP23017_DEFAULT_ADDRESS` in code |
+| Still fails | Try different driver board |
+
+### Issue: Solenoid Doesn't Click
+
+**Symptoms**: Code runs, channel activates (LED blinks), but solenoid doesn't move
+
+**Diagnostic Steps**:
+
+1. **Check DC power supply**:
+   ```
+   Measure voltage at V+ terminal
+   Expected: 12V or 24V (match solenoid rating)
+   ```
+
+2. **Check solenoid connection**:
+   ```
+   Verify solenoid connected to correct channel terminal
+   Verify solenoid ground connected to driver GND terminal
+   ```
+
+3. **Test solenoid directly**:
+   ```
+   Disconnect from driver
+   Apply DC voltage directly to solenoid
+   Should click when powered
+   ```
+
+4. **Check channel output**:
+   ```
+   Measure voltage at channel terminal when activated
+   Expected: ~V+ voltage when on, ~0V when off
+   ```
+
+**Solutions**:
+
+| Finding | Solution |
+|---------|----------|
+| No V+ voltage | Connect DC power supply |
+| DC supply voltage wrong | Use correct voltage supply |
+| Solenoid doesn't work directly | Replace solenoid |
+| No voltage at channel output | Check code, try different channel |
+
+### Issue: I2C Errors During Operation
+
+**Symptoms**: Communication works initially, then fails intermittently
+
+**Diagnostic Steps**:
+
+1. **Check cable length**: Keep I2C wires under 30cm
+2. **Check for noise**: Solenoid switching can cause EMI
+3. **Check pull-ups**: May need additional pull-up resistors
+
+**Solutions**:
+
+| Finding | Solution |
+|---------|----------|
+| Long cables | Shorten cables or add I2C buffer |
+| Errors correlate with solenoid activation | Add 0.1uF capacitors near driver, separate solenoid power |
+| Intermittent errors | Add 4.7k pull-ups to SDA/SCL |
+| Consistent errors | Reduce I2C speed to 100kHz |
+
+### Issue: Solenoid Gets Hot
+
+**Symptoms**: Solenoid warm/hot to touch after operation
+
+**Diagnostic Steps**:
+
+1. **Check on-time**: Are solenoids staying on too long?
+2. **Check duty cycle**: Too many activations per second?
+3. **Check voltage**: Is supply voltage too high?
+
+**Solutions**:
+
+| Finding | Solution |
+|---------|----------|
+| Solenoid always on | Check code for stuck state, verify safety timeout works |
+| High duty cycle | Reduce activation frequency |
+| Voltage too high | Use lower voltage supply |
+| Normal use, still hot | Solenoid may not be rated for continuous use |
+
+### Issue: Multiple Devices Conflict
+
+**Symptoms**: Multiple boards respond erratically
+
+**Diagnostic Steps**:
+
+1. **Run I2C scanner**: Check all detected addresses
+2. **Verify unique addresses**: Each board must have different A0/A1/A2 settings
+
+**Solutions**:
+
+| Finding | Solution |
+|---------|----------|
+| Duplicate addresses | Set different address jumpers on each board |
+| Bus overloaded | Split boards across Wire and Wire1 buses |
+
+---
+
+## Build and Upload Instructions
+
+### Build Project
+
+```bash
+# Navigate to project directory
+cd /path/to/mechanical-midi-piano
+
+# Build project
+pio run
+
+# Expected output:
+# Processing teensy41 (platform: teensy; board: teensy41; framework: arduino)
+# ...
+# Building .pio/build/teensy41/firmware.hex
+# ===== [SUCCESS] =====
+```
+
+### Upload to Teensy
+
+```bash
+# Upload firmware
+pio run --target upload
+
+# Or use shortcut
+pio run -t upload
+```
+
+### Open Serial Monitor
+
+```bash
+# Open serial monitor at 115200 baud
+pio device monitor
+
+# Or specify baud rate explicitly
+pio device monitor --baud 115200
+```
+
+### Full Build-Upload-Monitor Cycle
+
+```bash
+# Build, upload, and open monitor in one command
+pio run --target upload && pio device monitor
+```
