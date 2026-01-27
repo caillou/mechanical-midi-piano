@@ -153,15 +153,7 @@ SolenoidConfig SolenoidDriver::getConfig() const {
 // =============================================================================
 
 SolenoidError SolenoidDriver::on(uint8_t channel) {
-    // Check initialization
-    if (!_initialized) {
-        reportError(SolenoidError::NOT_INITIALIZED, channel);
-        return _lastError;
-    }
-
-    // Validate channel
-    if (channel >= _channelCount) {
-        reportError(SolenoidError::INVALID_CHANNEL, channel);
+    if (!validateChannel(channel)) {
         return _lastError;
     }
 
@@ -195,15 +187,7 @@ SolenoidError SolenoidDriver::on(uint8_t channel) {
 }
 
 SolenoidError SolenoidDriver::off(uint8_t channel) {
-    // Check initialization
-    if (!_initialized) {
-        reportError(SolenoidError::NOT_INITIALIZED, channel);
-        return _lastError;
-    }
-
-    // Validate channel
-    if (channel >= _channelCount) {
-        reportError(SolenoidError::INVALID_CHANNEL, channel);
+    if (!validateChannel(channel)) {
         return _lastError;
     }
 
@@ -269,12 +253,13 @@ SolenoidError SolenoidDriver::pulse(uint8_t channel, uint32_t durationMs) {
 // =============================================================================
 
 SolenoidError SolenoidDriver::allOn() {
-    if (!_initialized) {
-        reportError(SolenoidError::NOT_INITIALIZED);
+    if (!validateInitialized()) {
         return _lastError;
     }
 
     uint8_t failedCount = 0;
+    // Preserve the first error encountered so it can be returned after
+    // processing all remaining channels (subsequent on() calls may overwrite _lastError)
     SolenoidError firstError = SolenoidError::OK;
 
     // Turn on each channel individually (respects safety checks)
@@ -310,8 +295,7 @@ SolenoidError SolenoidDriver::allOn() {
 }
 
 SolenoidError SolenoidDriver::allOff() {
-    if (!_initialized) {
-        reportError(SolenoidError::NOT_INITIALIZED);
+    if (!validateInitialized()) {
         return _lastError;
     }
 
@@ -334,8 +318,7 @@ SolenoidError SolenoidDriver::allOff() {
 }
 
 SolenoidError SolenoidDriver::setAll(const uint8_t states[], uint8_t stateCount) {
-    if (!_initialized) {
-        reportError(SolenoidError::NOT_INITIALIZED);
+    if (!validateInitialized()) {
         return _lastError;
     }
 
@@ -371,8 +354,7 @@ SolenoidError SolenoidDriver::setAll(const uint8_t states[], uint8_t stateCount)
 }
 
 SolenoidError SolenoidDriver::setBoardChannels(uint8_t board, uint8_t states) {
-    if (!_initialized) {
-        reportError(SolenoidError::NOT_INITIALIZED);
+    if (!validateInitialized()) {
         return _lastError;
     }
 
@@ -415,9 +397,9 @@ SolenoidError SolenoidDriver::setBoardChannels(uint8_t board, uint8_t states) {
         _channels[globalCh].updateState(newState);
     }
 
-    // If any channels were blocked, report the error but still return success
-    // for the channels that were activated. The _lastError will indicate
-    // that some channels were blocked.
+    // If any channels were blocked by safety checks, return the error code
+    // that indicates why they were blocked. Unblocked channels are activated
+    // successfully, but the error indicates partial failure.
     if (blockedChannels != 0) {
         // Report the first blocked channel (the specific error was already
         // reported by isSafeToActivate, but we want to indicate partial failure)
@@ -603,6 +585,26 @@ uint8_t SolenoidDriver::getBoardAddress(uint8_t board) const {
 // =============================================================================
 // PRIVATE METHODS
 // =============================================================================
+
+bool SolenoidDriver::validateInitialized() {
+    if (!_initialized) {
+        reportError(SolenoidError::NOT_INITIALIZED);
+        return false;
+    }
+    return true;
+}
+
+bool SolenoidDriver::validateChannel(uint8_t channel) {
+    if (!_initialized) {
+        reportError(SolenoidError::NOT_INITIALIZED, channel);
+        return false;
+    }
+    if (channel >= _channelCount) {
+        reportError(SolenoidError::INVALID_CHANNEL, channel);
+        return false;
+    }
+    return true;
+}
 
 bool SolenoidDriver::writeChannel(uint8_t board, uint8_t channel, bool state) {
     if (board >= _boardCount || channel >= SOLENOID_CHANNELS_PER_BOARD) {

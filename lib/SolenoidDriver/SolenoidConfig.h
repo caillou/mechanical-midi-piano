@@ -43,9 +43,6 @@ constexpr float SOLENOID_DEFAULT_MAX_DUTY_CYCLE = 0.5f;
 /** Default duty cycle window duration (ms) - 10 second rolling window */
 constexpr uint32_t SOLENOID_DEFAULT_DUTY_CYCLE_WINDOW_MS = 10000;
 
-/** Default I2C communication timeout (ms) */
-constexpr uint32_t SOLENOID_DEFAULT_I2C_TIMEOUT_MS = 100;
-
 /** Default I2C clock speed (Hz) */
 constexpr uint32_t SOLENOID_DEFAULT_I2C_CLOCK_HZ = 400000;
 
@@ -161,14 +158,6 @@ struct SolenoidConfig {
      * Default: 10000ms (10 seconds)
      */
     uint32_t dutyCycleWindowMs = SOLENOID_DEFAULT_DUTY_CYCLE_WINDOW_MS;
-
-    /**
-     * I2C communication timeout (milliseconds)
-     *
-     * Time to wait for I2C response before declaring communication error.
-     * Default: 100ms
-     */
-    uint32_t i2cTimeoutMs = SOLENOID_DEFAULT_I2C_TIMEOUT_MS;
 
     /**
      * I2C clock frequency (Hz)

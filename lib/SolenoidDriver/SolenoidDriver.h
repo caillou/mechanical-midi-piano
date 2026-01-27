@@ -484,6 +484,21 @@ private:
     // =========================================================================
 
     /**
+     * @brief Validate that the driver is initialized
+     *
+     * @return true if initialized, false otherwise (reports NOT_INITIALIZED error)
+     */
+    bool validateInitialized();
+
+    /**
+     * @brief Validate that a channel index is valid and the driver is initialized
+     *
+     * @param channel Global channel index to validate
+     * @return true if valid, false otherwise (reports appropriate error)
+     */
+    bool validateChannel(uint8_t channel);
+
+    /**
      * @brief Write state to a single channel on the hardware
      *
      * @param board Board index

@@ -93,6 +93,11 @@ constexpr uint32_t TEST_DELAY_MS = 200;
 
 
 /**
+ * @note Current implementation assumes a single MCP23017 board at address 0x20.
+ * Multi-board support would require updating functions that use board index 0.
+ */
+
+/**
  * @defgroup Pins Pin Definitions
  * @{
  */
@@ -111,9 +116,6 @@ SolenoidDriver solenoidDriver;
 
 /** Flag indicating if MCP23017 was initialized successfully */
 bool mcpInitialized = false;
-
-/** Current channel states (bitmask) */
-uint8_t channelStates = 0x00;
 
 
 
@@ -310,7 +312,6 @@ bool initMCP23017()
     }
 
     Serial.println(F("  SolenoidDriver initialized, all channels OFF"));
-    channelStates = 0x00;
 
     return true;
 }
@@ -322,7 +323,9 @@ bool initMCP23017()
 /**
  * @brief Scan the I2C bus and report all found devices
  *
- * Scans addresses 0x08-0x77 and prints each found device.
+ * Scans the standard I2C address range (0x08-0x77) excluding reserved
+ * addresses. Identifies MCP23017 GPIO expanders in the range 0x20-0x27
+ * used by the solenoid driver.
  */
 void scanI2CBus()
 {
@@ -370,12 +373,12 @@ void scanI2CBus()
  *
  * @param channel Channel number (0-7)
  *
- * Reads the current state and sets the channel to the opposite state.
+ * Reads the current state from SolenoidDriver and sets the channel to the opposite state.
  * Prints the toggle action to Serial for debugging.
  */
 void toggleChannel(uint8_t channel)
 {
-    bool currentState = (channelStates >> channel) & 0x01;
+    bool currentState = solenoidDriver.isOn(channel);
     bool newState = !currentState;
 
     Serial.print(F("Toggling channel "));
@@ -420,16 +423,6 @@ bool setChannel(uint8_t channel, bool state)
         return false;
     }
 
-    // Update local state tracking
-    if (state)
-    {
-        channelStates |= (1 << channel);
-    }
-    else
-    {
-        channelStates &= ~(1 << channel);
-    }
-
     return true;
 }
 
@@ -457,9 +450,6 @@ bool setAllChannels(uint8_t states)
         Serial.println(SolenoidDriver::getErrorString(err));
         return false;
     }
-
-    // Update local state tracking
-    channelStates = states;
 
     return true;
 }
@@ -509,9 +499,6 @@ void deactivateAllChannels()
         solenoidDriver.emergencyStop();
         solenoidDriver.resetAllStats();
     }
-
-    // Reset local state tracking
-    channelStates = 0x00;
 
     Serial.println(F("[OK] All channels deactivated"));
 }
@@ -578,7 +565,6 @@ void testCommunication()
 
     // Ensure all channels are off after test
     solenoidDriver.allOff();
-    channelStates = 0x00;
 }
 
 /**
