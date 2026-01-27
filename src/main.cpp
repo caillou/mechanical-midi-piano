@@ -336,6 +336,8 @@ int8_t noteToChannel(uint8_t note)
  */
 void handleNoteOn(byte channel, byte note, byte velocity)
 {
+    (void)channel;  // Responds to all MIDI channels
+
     // Velocity 0 is equivalent to Note Off
     if (velocity == 0)
     {
@@ -376,6 +378,7 @@ void handleNoteOn(byte channel, byte note, byte velocity)
  */
 void handleNoteOff(byte channel, byte note, byte velocity)
 {
+    (void)channel;   // Responds to all MIDI channels
     (void)velocity;  // Unused parameter
 
     int8_t ch = noteToChannel(note);

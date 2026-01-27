@@ -182,7 +182,14 @@ bool SolenoidChannel::wouldExceedDutyCycle(uint32_t windowDurationMs, float maxD
 
     // Project forward: if we activate for estimatedOnTimeMs
     uint32_t projectedOnTime = onTimeInWindow + estimatedOnTimeMs;
-    uint32_t projectedWindowElapsed = windowElapsed + estimatedOnTimeMs;
+
+    // Overflow protection: if sum would exceed UINT32_MAX, cap at window duration
+    uint32_t projectedWindowElapsed;
+    if (windowElapsed > UINT32_MAX - estimatedOnTimeMs) {
+        projectedWindowElapsed = windowDurationMs;
+    } else {
+        projectedWindowElapsed = windowElapsed + estimatedOnTimeMs;
+    }
 
     // Cap to window duration
     if (projectedWindowElapsed > windowDurationMs) {

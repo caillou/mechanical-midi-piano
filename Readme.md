@@ -44,9 +44,6 @@ pio device monitor -b 115200
 
 | Command | Description |
 |---------|-------------|
-| `0`-`7` | Toggle individual solenoid channel |
-| `a` | Activate all channels for 100ms |
 | `x` | Emergency stop (all channels off) |
-| `s` | Run I2C bus scanner |
-| `r` | Re-run all diagnostic tests |
-| `h` | Show help menu |
+| `s` | Print status (driver state and channel states) |
+| `h` or `?` | Show help menu |

@@ -237,12 +237,9 @@ SolenoidError SolenoidDriver::set(uint8_t channel, bool state) {
 }
 
 SolenoidError SolenoidDriver::toggle(uint8_t channel) {
-    // Validate channel first
-    if (channel >= _channelCount) {
-        reportError(SolenoidError::INVALID_CHANNEL, channel);
+    if (!validateChannel(channel)) {
         return _lastError;
     }
-
     return set(channel, !_channels[channel].isOn());
 }
 
