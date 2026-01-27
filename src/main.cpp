@@ -1,9 +1,9 @@
 /**
  * @file main.cpp
- * @brief Solenoid Driver Test Program for Mechanical MIDI Piano
+ * @brief USB MIDI Solenoid Controller for Mechanical MIDI Piano
  *
- * This program tests the Adafruit I2C to 8 Channel Solenoid Driver
- * with a Teensy 4.1 microcontroller.
+ * This program implements a USB MIDI instrument using the Adafruit I2C
+ * Solenoid Driver with a Teensy 4.1 microcontroller.
  *
  * Hardware:
  *   - Teensy 4.1
@@ -11,24 +11,24 @@
  *   - I2C: SDA=Pin 18, SCL=Pin 19 (Wire)
  *   - Default I2C Address: 0x20
  *
- * Test Features:
- *   1. I2C bus scanner
- *   2. MCP23017 initialization and communication verification
- *   3. Sequential channel cycling
- *   4. All-channels simultaneous test
- *   5. Interactive serial commands
+ * MIDI Mapping:
+ *   - Note 60 (C4)  -> Solenoid Channel 0
+ *   - Note 61 (C#4) -> Solenoid Channel 1
+ *   - Note 62 (D4)  -> Solenoid Channel 2
+ *   - Note 63 (D#4) -> Solenoid Channel 3
+ *   - Note 64 (E4)  -> Solenoid Channel 4
+ *   - Note 65 (F4)  -> Solenoid Channel 5
+ *   - Note 66 (F#4) -> Solenoid Channel 6
+ *   - Note 67 (G4)  -> Solenoid Channel 7
  *
- * Serial Commands:
- *   'r' - Re-run all tests
- *   'a' - Activate all channels simultaneously
- *   's' - Run I2C scanner only
- *   '0'-'7' - Toggle individual channel
+ * Serial Commands (for debugging):
  *   'x' - Emergency stop (all off)
+ *   's' - Print status
  *   'h' - Show help menu
  *
  * @author Mechanical MIDI Piano Project
  * @date 2025-01-18
- * @version 1.0.0
+ * @version 2.0.0
  */
 
 #include <Arduino.h>
@@ -50,12 +50,6 @@ constexpr uint32_t I2C_CLOCK_SPEED = 400000;
 /** Default I2C address for MCP23017 (A0=A1=A2=0) */
 constexpr uint8_t MCP23017_DEFAULT_ADDRESS = 0x20;
 
-/** I2C scan address range start (excludes reserved addresses 0x00-0x07) */
-constexpr uint8_t I2C_SCAN_START_ADDR = 0x08;
-
-/** I2C scan address range end (excludes reserved addresses 0x78-0x7F) */
-constexpr uint8_t I2C_SCAN_END_ADDR = 0x78;
-
 /** @} */
 
 /**
@@ -72,32 +66,36 @@ constexpr uint8_t NUM_CHANNELS = 8;
 
 /**
  * Maximum solenoid on-time in milliseconds
- * Prevents coil overheating - adjust based on solenoid specs
+ * Prevents coil overheating - 2 seconds is plenty for piano notes
  */
-constexpr uint32_t MAX_ON_TIME_MS = 5000;
+constexpr uint32_t MAX_ON_TIME_MS = 2000;
 
 /**
  * Minimum off-time between activations in milliseconds
- * Allows coil cooling between activations
+ * 15ms allows fast trills while providing some cooling
  */
-constexpr uint32_t MIN_OFF_TIME_MS = 50;
-
-/**
- * Test activation duration in milliseconds
- * Short duration for safe testing
- */
-constexpr uint32_t TEST_ACTIVATION_MS = 100;
-
-/**
- * Delay between sequential channel tests in milliseconds
- */
-constexpr uint32_t TEST_DELAY_MS = 200;
+constexpr uint32_t MIN_OFF_TIME_MS = 15;
 
 /** @} */
 
+/**
+ * @defgroup MIDIConfig MIDI Configuration
+ * @{
+ */
 
-/** @note Current test application uses a single board (index 0).
- *  The SolenoidDriver library supports up to 8 boards per I2C bus. */
+/**
+ * Lowest MIDI note that triggers a solenoid (C4 = Middle C)
+ * Maps to solenoid channel 0
+ */
+constexpr uint8_t MIDI_NOTE_LOW = 60;
+
+/**
+ * Highest MIDI note that triggers a solenoid (G4)
+ * Maps to solenoid channel 7
+ */
+constexpr uint8_t MIDI_NOTE_HIGH = 67;
+
+/** @} */
 
 /**
  * @defgroup Pins Pin Definitions
@@ -116,9 +114,6 @@ constexpr uint8_t LED_PIN = LED_BUILTIN;
 /** SolenoidDriver instance for MCP23017 control */
 SolenoidDriver solenoidDriver;
 
-
-
-
 // =============================================================================
 // FUNCTION PROTOTYPES
 // =============================================================================
@@ -128,27 +123,19 @@ void initSerial();
 void initI2C();
 bool initMCP23017();
 
-// I2C Utilities
-void scanI2CBus();
+// MIDI Handlers
+int8_t noteToChannel(uint8_t note);
+void handleNoteOn(byte channel, byte note, byte velocity);
+void handleNoteOff(byte channel, byte note, byte velocity);
 
 // Solenoid Control
-void toggleChannel(uint8_t channel);
-bool setChannel(uint8_t channel, bool state);
-bool setAllChannels(uint8_t states);
-bool activateChannel(uint8_t channel, uint32_t duration);
 void deactivateAllChannels();
-
-// Test Functions
-void runAllTests();
-void testSequentialChannels();
-void testAllChannelsSimultaneous();
-void testCommunication();
 
 // Utility Functions
 void printSeparator();
 void printHelp();
+void printStatus();
 void handleSerialInput();
-
 
 // =============================================================================
 // SETUP
@@ -157,8 +144,7 @@ void handleSerialInput();
 /**
  * @brief Arduino setup function - runs once at startup
  *
- * Initializes serial communication, I2C bus, and MCP23017.
- * Runs initial diagnostic tests.
+ * Initializes serial communication, I2C bus, MCP23017, and MIDI handlers.
  */
 void setup()
 {
@@ -171,7 +157,7 @@ void setup()
 
     // Print startup banner
     printSeparator();
-    Serial.println(F("MECHANICAL MIDI PIANO - SOLENOID DRIVER TEST"));
+    Serial.println(F("MECHANICAL MIDI PIANO - USB MIDI CONTROLLER"));
     Serial.println(F("Teensy 4.1 + Adafruit I2C Solenoid Driver"));
     printSeparator();
     Serial.println();
@@ -179,23 +165,26 @@ void setup()
     // Initialize I2C bus
     initI2C();
 
-    // Scan for I2C devices
-    scanI2CBus();
-
     // Initialize MCP23017
     if (initMCP23017())
     {
         Serial.println(F("[OK] MCP23017 initialized successfully"));
-        // Run initial tests
-        Serial.println();
-        Serial.println(F("Running initial tests..."));
-        runAllTests();
     }
     else
     {
         Serial.println(F("[ERROR] Failed to initialize MCP23017!"));
         Serial.println(F("Check wiring and I2C address."));
     }
+
+    // Register MIDI callbacks
+    usbMIDI.setHandleNoteOn(handleNoteOn);
+    usbMIDI.setHandleNoteOff(handleNoteOff);
+    Serial.println(F("[OK] MIDI handlers registered"));
+    Serial.print(F("  Listening for notes "));
+    Serial.print(MIDI_NOTE_LOW);
+    Serial.print(F("-"));
+    Serial.print(MIDI_NOTE_HIGH);
+    Serial.println(F(" (C4-G4)"));
 
     // Print help menu
     Serial.println();
@@ -211,12 +200,13 @@ void setup()
 /**
  * @brief Arduino main loop - runs continuously
  *
- * Handles serial commands and monitors solenoid safety timeouts.
+ * Processes MIDI messages and monitors solenoid safety.
  */
 void loop()
 {
-    // Handle incoming serial commands
-    handleSerialInput();
+    // Process all pending MIDI messages
+    // This calls handleNoteOn/handleNoteOff callbacks as needed
+    while (usbMIDI.read()) { }
 
     // SolenoidDriver safety update - handles auto-shutoff for max on-time
     if (solenoidDriver.isInitialized())
@@ -224,8 +214,8 @@ void loop()
         solenoidDriver.update();
     }
 
-    // Small delay to prevent tight loop
-    delay(1);
+    // Handle incoming serial commands (emergency stop, status, help)
+    handleSerialInput();
 }
 
 // =============================================================================
@@ -314,173 +304,105 @@ bool initMCP23017()
 }
 
 // =============================================================================
-// I2C UTILITY FUNCTIONS
+// MIDI HANDLER FUNCTIONS
 // =============================================================================
 
 /**
- * @brief Scan the I2C bus and report all found devices with identification
+ * @brief Convert MIDI note number to solenoid channel
  *
- * Custom scanner that provides detailed output including device identification
- * (e.g., MCP23017 at specific addresses). The SolenoidDriver library also has
- * scanI2C() but it only returns a count without detailed per-device output.
+ * @param note MIDI note number (0-127)
+ * @return Channel number (0-7) if note is in range, -1 otherwise
+ *
+ * Maps notes 60-67 (C4 through G4) to channels 0-7.
  */
-void scanI2CBus()
+int8_t noteToChannel(uint8_t note)
 {
-    Serial.println();
-    Serial.println(F("Scanning I2C bus..."));
-
-    uint8_t deviceCount = 0;
-
-    for (uint8_t address = I2C_SCAN_START_ADDR; address < I2C_SCAN_END_ADDR; address++)
+    if (note < MIDI_NOTE_LOW || note > MIDI_NOTE_HIGH)
     {
-        Wire.beginTransmission(address);
-        uint8_t error = Wire.endTransmission();
-
-        if (error == 0)
-        {
-            Serial.print(F("  [FOUND] Device at address 0x"));
-            if (address < 16)
-                Serial.print(F("0"));
-            Serial.print(address, HEX);
-
-            // Identify known devices
-            if (address >= 0x20 && address <= 0x27)
-            {
-                Serial.print(F(" (MCP23017 - Solenoid Driver)"));
-            }
-
-            Serial.println();
-            deviceCount++;
-        }
+        return -1;
     }
-
-    Serial.println();
-    Serial.print(F("Scan complete. "));
-    Serial.print(deviceCount);
-    Serial.println(F(" device(s) found."));
+    return note - MIDI_NOTE_LOW;
 }
 
+/**
+ * @brief Handle MIDI Note On messages
+ *
+ * @param channel MIDI channel (1-16, ignored - we respond to all channels)
+ * @param note MIDI note number (0-127)
+ * @param velocity Note velocity (0-127, 0 treated as note-off)
+ *
+ * Called automatically by usbMIDI when a Note On message is received.
+ * Velocity 0 is treated as Note Off per MIDI specification.
+ */
+void handleNoteOn(byte channel, byte note, byte velocity)
+{
+    // Velocity 0 is equivalent to Note Off
+    if (velocity == 0)
+    {
+        handleNoteOff(channel, note, velocity);
+        return;
+    }
+
+    int8_t ch = noteToChannel(note);
+    if (ch < 0)
+    {
+        return;  // Note not in our range
+    }
+
+    if (!solenoidDriver.isInitialized())
+    {
+        return;
+    }
+
+    // Turn on the solenoid
+    SolenoidError err = solenoidDriver.on(ch);
+    if (err != SolenoidError::OK)
+    {
+        Serial.print(F("[MIDI] Note "));
+        Serial.print(note);
+        Serial.print(F(" ON failed: "));
+        Serial.println(SolenoidDriver::getErrorString(err));
+    }
+}
+
+/**
+ * @brief Handle MIDI Note Off messages
+ *
+ * @param channel MIDI channel (1-16, ignored)
+ * @param note MIDI note number (0-127)
+ * @param velocity Release velocity (0-127, ignored)
+ *
+ * Called automatically by usbMIDI when a Note Off message is received.
+ */
+void handleNoteOff(byte channel, byte note, byte velocity)
+{
+    (void)velocity;  // Unused parameter
+
+    int8_t ch = noteToChannel(note);
+    if (ch < 0)
+    {
+        return;  // Note not in our range
+    }
+
+    if (!solenoidDriver.isInitialized())
+    {
+        return;
+    }
+
+    // Turn off the solenoid
+    SolenoidError err = solenoidDriver.off(ch);
+    if (err != SolenoidError::OK)
+    {
+        Serial.print(F("[MIDI] Note "));
+        Serial.print(note);
+        Serial.print(F(" OFF failed: "));
+        Serial.println(SolenoidDriver::getErrorString(err));
+    }
+}
 
 // =============================================================================
 // SOLENOID CONTROL FUNCTIONS
 // =============================================================================
-
-/**
- * @brief Toggle a solenoid channel on or off
- *
- * @param channel Channel number (0-7)
- *
- * Reads the current state from SolenoidDriver and sets the channel to the opposite state.
- * Prints the toggle action to Serial for debugging.
- */
-void toggleChannel(uint8_t channel)
-{
-    bool currentState = solenoidDriver.isOn(channel);
-    bool newState = !currentState;
-
-    Serial.print(F("Toggling channel "));
-    Serial.print(channel);
-    Serial.print(F(" -> "));
-    Serial.println(newState ? F("ON") : F("OFF"));
-
-    setChannel(channel, newState);
-}
-
-/**
- * @brief Set the state of a single solenoid channel
- *
- * @param channel Channel number (0-7)
- * @param state true=ON, false=OFF
- * @return true if operation successful, false otherwise
- *
- * Uses SolenoidDriver with built-in safety checks for maximum on-time
- * and minimum off-time.
- */
-bool setChannel(uint8_t channel, bool state)
-{
-    if (channel >= NUM_CHANNELS)
-    {
-        Serial.print(F("[ERROR] Invalid channel: "));
-        Serial.println(channel);
-        return false;
-    }
-
-    if (!solenoidDriver.isInitialized())
-    {
-        Serial.println(F("[ERROR] MCP23017 not initialized"));
-        return false;
-    }
-
-    // Use SolenoidDriver for control with built-in safety
-    SolenoidError err = solenoidDriver.set(channel, state);
-    if (err != SolenoidError::OK)
-    {
-        Serial.print(F("[ERROR] setChannel failed: "));
-        Serial.println(SolenoidDriver::getErrorString(err));
-        return false;
-    }
-
-    return true;
-}
-
-/**
- * @brief Set all channel states at once using a bitmask
- *
- * @param states Bitmask of channel states (bit 0 = channel 0, etc.)
- * @return true if operation successful, false otherwise
- *
- * Uses SolenoidDriver's setBoardChannels for efficient single I2C transaction.
- */
-bool setAllChannels(uint8_t states)
-{
-    if (!solenoidDriver.isInitialized())
-    {
-        Serial.println(F("[ERROR] MCP23017 not initialized"));
-        return false;
-    }
-
-    // Use SolenoidDriver to set all channels at once
-    SolenoidError err = solenoidDriver.setBoardChannels(0, states);
-    if (err != SolenoidError::OK)
-    {
-        Serial.print(F("[ERROR] setAllChannels failed: "));
-        Serial.println(SolenoidDriver::getErrorString(err));
-        return false;
-    }
-
-    return true;
-}
-
-/**
- * @brief Activate a channel for a specified duration, then deactivate
- *
- * @param channel Channel number (0-7)
- * @param duration Activation duration in milliseconds
- * @return true if operation successful, false otherwise
- *
- * This is a blocking function - it waits for the duration to complete.
- */
-bool activateChannel(uint8_t channel, uint32_t duration)
-{
-    // Enforce maximum on-time
-    if (duration > MAX_ON_TIME_MS)
-    {
-        Serial.print(F("[WARNING] Duration clamped to max: "));
-        Serial.println(MAX_ON_TIME_MS);
-        duration = MAX_ON_TIME_MS;
-    }
-
-    if (!setChannel(channel, true))
-    {
-        return false;
-    }
-
-    delay(duration);
-
-    setChannel(channel, false);
-
-    return true;
-}
 
 /**
  * @brief Immediately deactivate all solenoid channels
@@ -501,141 +423,6 @@ void deactivateAllChannels()
 }
 
 // =============================================================================
-// TEST FUNCTIONS
-// =============================================================================
-
-/**
- * @brief Run all diagnostic tests
- */
-void runAllTests()
-{
-    if (!solenoidDriver.isInitialized())
-    {
-        Serial.println(F("[ERROR] Cannot run tests - MCP23017 not initialized"));
-        return;
-    }
-
-    printSeparator();
-    Serial.println(F("RUNNING ALL TESTS"));
-    printSeparator();
-
-    // Test 1: Communication verification
-    Serial.println(F("\n--- Test 1: Communication Verification ---"));
-    testCommunication();
-
-    // Wait for cooldown period before next test
-    delay(MIN_OFF_TIME_MS + 10);  // minOffTimeMs + margin to ensure cooldown expires
-
-    // Test 2: Sequential channel test
-    Serial.println(F("\n--- Test 2: Sequential Channel Test ---"));
-    testSequentialChannels();
-
-    // Test 3: Simultaneous channel test
-    Serial.println(F("\n--- Test 3: All Channels Simultaneous ---"));
-    testAllChannelsSimultaneous();
-
-    printSeparator();
-    Serial.println(F("ALL TESTS COMPLETE"));
-    printSeparator();
-}
-
-/**
- * @brief Test communication by pulsing channel 0
- *
- * Uses SolenoidDriver's pulse function for a simple communication test.
- */
-void testCommunication()
-{
-    Serial.println(F("Testing communication with pulse test..."));
-
-    // Use pulse to test communication - 50ms pulse on channel 0
-    SolenoidError err = solenoidDriver.pulse(0, 50);
-    if (err == SolenoidError::OK)
-    {
-        Serial.println(F("  [OK] Communication verified (pulse test passed)"));
-    }
-    else
-    {
-        Serial.print(F("  [ERROR] Communication test failed: "));
-        Serial.println(SolenoidDriver::getErrorString(err));
-    }
-
-    // Ensure all channels are off after test
-    solenoidDriver.allOff();
-}
-
-/**
- * @brief Test each channel sequentially
- *
- * Activates each channel one at a time for TEST_ACTIVATION_MS,
- * then waits TEST_DELAY_MS before the next channel.
- */
-void testSequentialChannels()
-{
-    Serial.println(F("Testing channels sequentially..."));
-    Serial.print(F("  Activation time: "));
-    Serial.print(TEST_ACTIVATION_MS);
-    Serial.print(F("ms, Delay: "));
-    Serial.print(TEST_DELAY_MS);
-    Serial.println(F("ms"));
-    Serial.println();
-
-    for (uint8_t channel = 0; channel < NUM_CHANNELS; channel++)
-    {
-        Serial.print(F("  Channel "));
-        Serial.print(channel);
-        Serial.print(F(": ON..."));
-
-        digitalWrite(LED_PIN, HIGH);
-
-        if (activateChannel(channel, TEST_ACTIVATION_MS))
-        {
-            Serial.println(F(" OFF [OK]"));
-        }
-        else
-        {
-            Serial.println(F(" [FAILED]"));
-        }
-
-        digitalWrite(LED_PIN, LOW);
-
-        // Wait between channels (accounts for min off time)
-        delay(TEST_DELAY_MS);
-    }
-
-    Serial.println(F("  Sequential test complete."));
-}
-
-/**
- * @brief Test all channels activated simultaneously
- *
- * Activates all 8 channels at once for TEST_ACTIVATION_MS.
- */
-void testAllChannelsSimultaneous()
-{
-    Serial.println(F("Activating all channels simultaneously..."));
-    Serial.print(F("  Duration: "));
-    Serial.print(TEST_ACTIVATION_MS);
-    Serial.println(F("ms"));
-
-    digitalWrite(LED_PIN, HIGH);
-
-    // All channels on
-    setAllChannels(0xFF);
-    Serial.println(F("  All channels ON"));
-
-    delay(TEST_ACTIVATION_MS);
-
-    // All channels off
-    setAllChannels(0x00);
-    Serial.println(F("  All channels OFF"));
-
-    digitalWrite(LED_PIN, LOW);
-
-    Serial.println(F("  Simultaneous test complete."));
-}
-
-// =============================================================================
 // UTILITY FUNCTIONS
 // =============================================================================
 
@@ -653,14 +440,47 @@ void printSeparator()
 void printHelp()
 {
     Serial.println(F("SERIAL COMMANDS:"));
-    Serial.println(F("  'r' - Re-run all tests"));
-    Serial.println(F("  'a' - Activate all channels for 100ms"));
-    Serial.println(F("  's' - Run I2C scanner"));
-    Serial.println(F("  '0'-'7' - Toggle individual channel"));
-    Serial.println(F("  'x' - Emergency stop (all off)"));
+    Serial.println(F("  'x' - Emergency stop (all solenoids off)"));
+    Serial.println(F("  's' - Print status"));
     Serial.println(F("  'h' - Show this help menu"));
     Serial.println();
-    Serial.println(F("Waiting for commands..."));
+    Serial.println(F("MIDI: Listening for notes 60-67 (C4-G4) on all channels"));
+    Serial.println();
+    Serial.println(F("Ready for MIDI input..."));
+}
+
+/**
+ * @brief Print current driver status
+ */
+void printStatus()
+{
+    printSeparator();
+    Serial.println(F("STATUS"));
+    printSeparator();
+
+    Serial.print(F("Driver initialized: "));
+    Serial.println(solenoidDriver.isInitialized() ? F("Yes") : F("No"));
+
+    if (solenoidDriver.isInitialized())
+    {
+        Serial.print(F("Boards: "));
+        Serial.println(solenoidDriver.getBoardCount());
+        Serial.print(F("Channels: "));
+        Serial.println(solenoidDriver.getChannelCount());
+
+        Serial.println(F("Channel states:"));
+        for (uint8_t i = 0; i < NUM_CHANNELS; i++)
+        {
+            Serial.print(F("  Ch "));
+            Serial.print(i);
+            Serial.print(F(" (Note "));
+            Serial.print(MIDI_NOTE_LOW + i);
+            Serial.print(F("): "));
+            Serial.println(solenoidDriver.isOn(i) ? F("ON") : F("off"));
+        }
+    }
+
+    printSeparator();
 }
 
 /**
@@ -682,44 +502,26 @@ void handleSerialInput()
 
         switch (cmd)
         {
-        case 'r':
-        case 'R':
-            Serial.println(F("Re-running all tests..."));
-            runAllTests();
-            break;
-
-        case 'a':
-        case 'A':
-            Serial.println(F("Activating all channels..."));
-            testAllChannelsSimultaneous();
-            break;
-
-        case 's':
-        case 'S':
-            scanI2CBus();
-            break;
-
-        case '0':
-        case '1':
-        case '2':
-        case '3':
-        case '4':
-        case '5':
-        case '6':
-        case '7':
-            toggleChannel(cmd - '0');
-            break;
-
         case 'x':
         case 'X':
             Serial.println(F("EMERGENCY STOP"));
             deactivateAllChannels();
             break;
 
+        case 's':
+        case 'S':
+            printStatus();
+            break;
+
         case 'h':
         case 'H':
         case '?':
             printHelp();
+            break;
+
+        case '\r':
+        case '\n':
+            // Ignore newlines
             break;
 
         default:
