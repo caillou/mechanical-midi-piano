@@ -509,6 +509,14 @@ void SolenoidDriver::emergencyStop() {
     debugPrint("Emergency stop - all channels off");
 }
 
+void SolenoidDriver::resetAllStats() {
+    for (uint8_t ch = 0; ch < _channelCount; ch++) {
+        _channels[ch].resetStats();
+    }
+
+    debugPrint("All channel stats reset");
+}
+
 // =============================================================================
 // ERROR HANDLING
 // =============================================================================

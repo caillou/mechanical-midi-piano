@@ -163,6 +163,12 @@ bool SolenoidChannel::wouldExceedDutyCycle(uint32_t windowDurationMs, float maxD
 
     // Calculate current on-time in window
     uint32_t windowElapsed = (_windowStartTime > 0) ? (now - _windowStartTime) : 0;
+
+    // If window hasn't started yet, first activation is always safe
+    if (windowElapsed == 0) {
+        return false;
+    }
+
     uint32_t onTimeInWindow = _windowOnTime;
 
     // If currently on (shouldn't normally be when calling this, but handle it)

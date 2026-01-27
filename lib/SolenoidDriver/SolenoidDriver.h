@@ -372,6 +372,17 @@ public:
      */
     void emergencyStop();
 
+    /**
+     * @brief Reset statistics for all channels
+     *
+     * Clears the duty cycle tracking window, total on-time, and activation
+     * count for all channels. This gives a clean slate after an emergency
+     * stop, preventing "duty cycle exceeded" errors from persisting.
+     *
+     * Call this after emergencyStop() to fully reset the driver state.
+     */
+    void resetAllStats();
+
     // =========================================================================
     // ERROR HANDLING
     // =========================================================================
