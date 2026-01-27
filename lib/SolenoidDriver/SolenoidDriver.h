@@ -89,6 +89,10 @@ typedef void (*SolenoidErrorCallback)(SolenoidError error, uint8_t channel);
  * }
  * @endcode
  */
+/**
+ * @note Supports up to 8 MCP23017 boards per I2C bus.
+ * Use begin() with an array of addresses for multi-board setups.
+ */
 class SolenoidDriver {
 public:
     // =========================================================================
@@ -561,6 +565,14 @@ private:
      * @param channel Channel number
      */
     void debugPrintChannel(const char* msg, uint8_t channel) const;
+
+    /**
+     * @brief Update channel state objects for all channels on a board
+     *
+     * @param board Board index
+     * @param states Bitmask of channel states
+     */
+    void updateBoardChannelStates(uint8_t board, uint8_t states);
 };
 
 #endif // SOLENOID_DRIVER_H

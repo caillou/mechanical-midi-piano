@@ -140,8 +140,10 @@ float SolenoidChannel::getDutyCyclePercent(uint32_t windowDurationMs) {
 
     // If currently on, add the ongoing duration
     if (_isOn && _lastOnTime >= _windowStartTime) {
+        // Normal case: channel turned on after window started
         onTimeInWindow += (now - _lastOnTime);
     } else if (_isOn && _lastOnTime < _windowStartTime) {
+        // Edge case: channel was already on when window was reset, only count from window start
         // Channel was on before window started; only count time since window start
         onTimeInWindow += (now - _windowStartTime);
     }

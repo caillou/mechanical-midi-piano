@@ -81,8 +81,9 @@ bool SolenoidDriver::begin(TwoWire& wire, const uint8_t addresses[], uint8_t cou
     // Store wire reference
     _wire = &wire;
 
-    // Set I2C clock speed
+    // Set I2C clock speed and timeout
     _wire->setClock(_config.i2cClockHz);
+    _wire->setTimeout(100);  // 100ms I2C timeout to prevent bus lockup
 
     // Reset state
     _boardCount = 0;
@@ -121,6 +122,10 @@ bool SolenoidDriver::begin(TwoWire& wire, const uint8_t addresses[], uint8_t cou
         // Initialize channel objects for this board
         for (uint8_t ch = 0; ch < SOLENOID_CHANNELS_PER_BOARD; ch++) {
             uint8_t globalIdx = (i * SOLENOID_CHANNELS_PER_BOARD) + ch;
+            if (globalIdx >= SOLENOID_MAX_CHANNELS) {
+                reportError(SolenoidError::INVALID_CHANNEL);
+                return false;
+            }
             _channels[globalIdx] = SolenoidChannel(i, ch, globalIdx);
         }
 
@@ -141,6 +146,19 @@ void SolenoidDriver::setConfig(const SolenoidConfig& config) {
     // Apply I2C clock speed if already initialized
     if (_wire != nullptr) {
         _wire->setClock(_config.i2cClockHz);
+    }
+
+    // Validate configuration
+    if (_config.debugEnabled) {
+        if (_config.maxOnTimeMs == 0) {
+            debugPrint("Warning: maxOnTimeMs is 0, auto-shutoff disabled");
+        }
+        if (_config.maxDutyCycle >= 1.0f) {
+            debugPrint("Warning: maxDutyCycle >= 1.0, duty cycle limiting disabled");
+        }
+        if (!_config.safetyEnabled) {
+            debugPrint("Warning: Safety features disabled");
+        }
     }
 }
 
@@ -307,10 +325,7 @@ SolenoidError SolenoidDriver::allOff() {
         }
 
         // Update channel states
-        for (uint8_t ch = 0; ch < SOLENOID_CHANNELS_PER_BOARD; ch++) {
-            uint8_t globalCh = (board * SOLENOID_CHANNELS_PER_BOARD) + ch;
-            _channels[globalCh].updateState(false);
-        }
+        updateBoardChannelStates(board, 0x00);
     }
 
     _lastError = SolenoidError::OK;
@@ -323,7 +338,7 @@ SolenoidError SolenoidDriver::setAll(const uint8_t states[], uint8_t stateCount)
     }
 
     // Validate that the states array has enough elements
-    if (stateCount < _boardCount) {
+    if (stateCount != _boardCount) {
         debugPrint("setAll: stateCount less than board count");
         reportError(SolenoidError::INVALID_BOARD);
         return _lastError;
@@ -391,11 +406,7 @@ SolenoidError SolenoidDriver::setBoardChannels(uint8_t board, uint8_t states) {
     }
 
     // Update channel states
-    for (uint8_t ch = 0; ch < SOLENOID_CHANNELS_PER_BOARD; ch++) {
-        uint8_t globalCh = (board * SOLENOID_CHANNELS_PER_BOARD) + ch;
-        bool newState = (states >> ch) & 0x01;
-        _channels[globalCh].updateState(newState);
-    }
+    updateBoardChannelStates(board, states);
 
     // If any channels were blocked by safety checks, return the error code
     // that indicates why they were blocked. Unblocked channels are activated
@@ -657,8 +668,8 @@ bool SolenoidDriver::isSafeToActivate(uint8_t channel) {
 
     // Check duty cycle using rolling window
     if (_config.maxDutyCycle < 1.0f && _config.dutyCycleWindowMs > 0) {
-        // Estimate that the solenoid will be on for at least minOffTimeMs
-        // (a conservative estimate for duty cycle projection)
+        // Use minOffTimeMs as a conservative estimate for the on-duration
+        // in the duty cycle projection (or 100ms default if cooldown is disabled)
         uint32_t estimatedOnTime = _config.minOffTimeMs > 0 ? _config.minOffTimeMs : 100;
 
         // Check current duty cycle in the window
@@ -715,5 +726,13 @@ void SolenoidDriver::debugPrintChannel(const char* msg, uint8_t channel) const {
         Serial.print(F("[SolenoidDriver] "));
         Serial.print(msg);
         Serial.println(channel);
+    }
+}
+
+void SolenoidDriver::updateBoardChannelStates(uint8_t board, uint8_t states) {
+    for (uint8_t ch = 0; ch < SOLENOID_CHANNELS_PER_BOARD; ch++) {
+        uint8_t globalCh = (board * SOLENOID_CHANNELS_PER_BOARD) + ch;
+        bool newState = (states >> ch) & 0x01;
+        _channels[globalCh].updateState(newState);
     }
 }

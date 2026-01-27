@@ -50,7 +50,7 @@ public:
     /**
      * @brief Construct a new SolenoidChannel object
      *
-     * @param boardIndex Index of the driver board (0-15)
+     * @param boardIndex Index of the driver board (0-7)
      * @param channelIndex Index of the channel on the board (0-7)
      * @param globalIndex Global channel index across all boards (0-127)
      *

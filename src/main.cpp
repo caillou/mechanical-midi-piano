@@ -66,6 +66,10 @@ constexpr uint8_t I2C_SCAN_END_ADDR = 0x78;
 /** Number of solenoid channels on the driver board */
 constexpr uint8_t NUM_CHANNELS = 8;
 
+/** @note Timing calculations use unsigned 32-bit subtraction which is safe
+ *  across millis() overflow (wraps every ~49.7 days) due to C/C++ unsigned
+ *  arithmetic guarantees. */
+
 /**
  * Maximum solenoid on-time in milliseconds
  * Prevents coil overheating - adjust based on solenoid specs
@@ -92,10 +96,8 @@ constexpr uint32_t TEST_DELAY_MS = 200;
 /** @} */
 
 
-/**
- * @note Current implementation assumes a single MCP23017 board at address 0x20.
- * Multi-board support would require updating functions that use board index 0.
- */
+/** @note Current test application uses a single board (index 0).
+ *  The SolenoidDriver library supports up to 8 boards per I2C bus. */
 
 /**
  * @defgroup Pins Pin Definitions
@@ -114,8 +116,6 @@ constexpr uint8_t LED_PIN = LED_BUILTIN;
 /** SolenoidDriver instance for MCP23017 control */
 SolenoidDriver solenoidDriver;
 
-/** Flag indicating if MCP23017 was initialized successfully */
-bool mcpInitialized = false;
 
 
 
@@ -186,8 +186,6 @@ void setup()
     if (initMCP23017())
     {
         Serial.println(F("[OK] MCP23017 initialized successfully"));
-        mcpInitialized = true;
-
         // Run initial tests
         Serial.println();
         Serial.println(F("Running initial tests..."));
@@ -197,7 +195,6 @@ void setup()
     {
         Serial.println(F("[ERROR] Failed to initialize MCP23017!"));
         Serial.println(F("Check wiring and I2C address."));
-        mcpInitialized = false;
     }
 
     // Print help menu
@@ -222,7 +219,7 @@ void loop()
     handleSerialInput();
 
     // SolenoidDriver safety update - handles auto-shutoff for max on-time
-    if (mcpInitialized)
+    if (solenoidDriver.isInitialized())
     {
         solenoidDriver.update();
     }
@@ -321,11 +318,11 @@ bool initMCP23017()
 // =============================================================================
 
 /**
- * @brief Scan the I2C bus and report all found devices
+ * @brief Scan the I2C bus and report all found devices with identification
  *
- * Scans the standard I2C address range (0x08-0x77) excluding reserved
- * addresses. Identifies MCP23017 GPIO expanders in the range 0x20-0x27
- * used by the solenoid driver.
+ * Custom scanner that provides detailed output including device identification
+ * (e.g., MCP23017 at specific addresses). The SolenoidDriver library also has
+ * scanI2C() but it only returns a count without detailed per-device output.
  */
 void scanI2CBus()
 {
@@ -408,7 +405,7 @@ bool setChannel(uint8_t channel, bool state)
         return false;
     }
 
-    if (!mcpInitialized)
+    if (!solenoidDriver.isInitialized())
     {
         Serial.println(F("[ERROR] MCP23017 not initialized"));
         return false;
@@ -436,7 +433,7 @@ bool setChannel(uint8_t channel, bool state)
  */
 bool setAllChannels(uint8_t states)
 {
-    if (!mcpInitialized)
+    if (!solenoidDriver.isInitialized())
     {
         Serial.println(F("[ERROR] MCP23017 not initialized"));
         return false;
@@ -494,7 +491,7 @@ bool activateChannel(uint8_t channel, uint32_t duration)
  */
 void deactivateAllChannels()
 {
-    if (mcpInitialized)
+    if (solenoidDriver.isInitialized())
     {
         solenoidDriver.emergencyStop();
         solenoidDriver.resetAllStats();
@@ -512,7 +509,7 @@ void deactivateAllChannels()
  */
 void runAllTests()
 {
-    if (!mcpInitialized)
+    if (!solenoidDriver.isInitialized())
     {
         Serial.println(F("[ERROR] Cannot run tests - MCP23017 not initialized"));
         return;
@@ -723,11 +720,6 @@ void handleSerialInput()
         case 'H':
         case '?':
             printHelp();
-            break;
-
-        case '\n':
-        case '\r':
-            // Ignore newlines
             break;
 
         default:
