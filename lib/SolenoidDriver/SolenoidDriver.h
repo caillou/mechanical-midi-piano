@@ -258,11 +258,12 @@ public:
     /**
      * @brief Turn on all channels
      *
-     * @return SolenoidError::OK if all channels turned on successfully
+     * @return SolenoidError::OK if all channels turned on successfully.
+     *         Returns safety error code (SAFETY_COOLDOWN or DUTY_CYCLE_EXCEEDED)
+     *         if some channels were blocked by safety checks. Channels that fail
+     *         safety checks remain off while others are turned on.
      *
      * Applies safety checks to each channel individually.
-     * Channels that fail safety checks will remain off.
-     * Returns OK even if some channels failed safety checks.
      */
     SolenoidError allOn();
 
@@ -299,7 +300,10 @@ public:
      *
      * @param board Board index (0 to boardCount-1)
      * @param states Bitmask of channel states (bit 0 = channel 0)
-     * @return SolenoidError::OK on success
+     * @return SolenoidError::OK if all channels set successfully.
+     *         Returns safety error code if some channels were blocked by
+     *         safety checks (cooldown or duty cycle). Channels that fail
+     *         safety checks remain in their previous state.
      *
      * More efficient than setting channels individually - uses a single
      * I2C transaction.

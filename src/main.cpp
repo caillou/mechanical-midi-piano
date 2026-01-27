@@ -50,6 +50,12 @@ constexpr uint32_t I2C_CLOCK_SPEED = 400000;
 /** Default I2C address for MCP23017 (A0=A1=A2=0) */
 constexpr uint8_t MCP23017_DEFAULT_ADDRESS = 0x20;
 
+/** I2C scan address range start (excludes reserved addresses 0x00-0x07) */
+constexpr uint8_t I2C_SCAN_START_ADDR = 0x08;
+
+/** I2C scan address range end (excludes reserved addresses 0x78-0x7F) */
+constexpr uint8_t I2C_SCAN_END_ADDR = 0x78;
+
 /** @} */
 
 /**
@@ -109,11 +115,6 @@ bool mcpInitialized = false;
 /** Current channel states (bitmask) */
 uint8_t channelStates = 0x00;
 
-/** Timestamp when each channel was last turned on (for timeout protection) */
-uint32_t channelOnTime[NUM_CHANNELS] = {0};
-
-/** Timestamp when each channel was last turned off (for cooldown enforcement) */
-uint32_t channelOffTime[NUM_CHANNELS] = {0};
 
 
 // =============================================================================
@@ -127,9 +128,9 @@ bool initMCP23017();
 
 // I2C Utilities
 void scanI2CBus();
-uint8_t countI2CDevices();
 
 // Solenoid Control
+void toggleChannel(uint8_t channel);
 bool setChannel(uint8_t channel, bool state);
 bool setAllChannels(uint8_t states);
 bool activateChannel(uint8_t channel, uint32_t duration);
@@ -330,7 +331,7 @@ void scanI2CBus()
 
     uint8_t deviceCount = 0;
 
-    for (uint8_t address = 8; address < 120; address++)
+    for (uint8_t address = I2C_SCAN_START_ADDR; address < I2C_SCAN_END_ADDR; address++)
     {
         Wire.beginTransmission(address);
         uint8_t error = Wire.endTransmission();
@@ -359,30 +360,31 @@ void scanI2CBus()
     Serial.println(F(" device(s) found."));
 }
 
-/**
- * @brief Count the number of I2C devices on the bus
- *
- * @return Number of devices found
- */
-uint8_t countI2CDevices()
-{
-    uint8_t count = 0;
-
-    for (uint8_t address = 8; address < 120; address++)
-    {
-        Wire.beginTransmission(address);
-        if (Wire.endTransmission() == 0)
-        {
-            count++;
-        }
-    }
-
-    return count;
-}
 
 // =============================================================================
 // SOLENOID CONTROL FUNCTIONS
 // =============================================================================
+
+/**
+ * @brief Toggle a solenoid channel on or off
+ *
+ * @param channel Channel number (0-7)
+ *
+ * Reads the current state and sets the channel to the opposite state.
+ * Prints the toggle action to Serial for debugging.
+ */
+void toggleChannel(uint8_t channel)
+{
+    bool currentState = (channelStates >> channel) & 0x01;
+    bool newState = !currentState;
+
+    Serial.print(F("Toggling channel "));
+    Serial.print(channel);
+    Serial.print(F(" -> "));
+    Serial.println(newState ? F("ON") : F("OFF"));
+
+    setChannel(channel, newState);
+}
 
 /**
  * @brief Set the state of a single solenoid channel
@@ -418,18 +420,14 @@ bool setChannel(uint8_t channel, bool state)
         return false;
     }
 
-    // Update local state tracking for compatibility
-    uint32_t now = millis();
+    // Update local state tracking
     if (state)
     {
         channelStates |= (1 << channel);
-        channelOnTime[channel] = now;
     }
     else
     {
         channelStates &= ~(1 << channel);
-        channelOffTime[channel] = now;
-        channelOnTime[channel] = 0;
     }
 
     return true;
@@ -460,26 +458,7 @@ bool setAllChannels(uint8_t states)
         return false;
     }
 
-    // Update local state tracking for compatibility
-    uint32_t now = millis();
-    for (uint8_t i = 0; i < NUM_CHANNELS; i++)
-    {
-        bool newState = (states >> i) & 0x01;
-        bool oldState = (channelStates >> i) & 0x01;
-
-        if (newState && !oldState)
-        {
-            // Channel turning on
-            channelOnTime[i] = now;
-        }
-        else if (!newState && oldState)
-        {
-            // Channel turning off
-            channelOffTime[i] = now;
-            channelOnTime[i] = 0;
-        }
-    }
-
+    // Update local state tracking
     channelStates = states;
 
     return true;
@@ -531,13 +510,8 @@ void deactivateAllChannels()
         solenoidDriver.resetAllStats();
     }
 
-    // Reset all tracking
+    // Reset local state tracking
     channelStates = 0x00;
-    for (uint8_t i = 0; i < NUM_CHANNELS; i++)
-    {
-        channelOnTime[i] = 0;
-        channelOffTime[i] = millis();
-    }
 
     Serial.println(F("[OK] All channels deactivated"));
 }
@@ -566,7 +540,7 @@ void runAllTests()
     testCommunication();
 
     // Wait for cooldown period before next test
-    delay(MIN_OFF_TIME_MS + 10);  // 60ms delay to ensure cooldown expires
+    delay(MIN_OFF_TIME_MS + 10);  // minOffTimeMs + margin to ensure cooldown expires
 
     // Test 2: Sequential channel test
     Serial.println(F("\n--- Test 2: Sequential Channel Test ---"));
@@ -750,19 +724,8 @@ void handleSerialInput()
         case '5':
         case '6':
         case '7':
-        {
-            uint8_t channel = cmd - '0';
-            bool currentState = (channelStates >> channel) & 0x01;
-            bool newState = !currentState;
-
-            Serial.print(F("Toggling channel "));
-            Serial.print(channel);
-            Serial.print(F(" -> "));
-            Serial.println(newState ? F("ON") : F("OFF"));
-
-            setChannel(channel, newState);
+            toggleChannel(cmd - '0');
             break;
-        }
 
         case 'x':
         case 'X':

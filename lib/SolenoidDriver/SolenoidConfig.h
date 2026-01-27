@@ -25,7 +25,7 @@ constexpr uint8_t SOLENOID_MAX_BOARDS_PER_BUS = 8;
 constexpr uint8_t SOLENOID_CHANNELS_PER_BOARD = 8;
 
 /** Maximum total channels (for static allocation) */
-constexpr uint8_t SOLENOID_MAX_CHANNELS = 128;  // 16 boards x 8 channels
+constexpr uint8_t SOLENOID_MAX_CHANNELS = 128;  // Supports multiple boards with 8 channels each
 
 // =============================================================================
 // DEFAULT CONFIGURATION VALUES
@@ -96,7 +96,7 @@ enum class SolenoidError : uint8_t {
     /** Safety: Duty cycle limit exceeded */
     DUTY_CYCLE_EXCEEDED = 7,
 
-    /** Operation in progress (non-blocking mode) */
+    /** Reserved for future non-blocking operations */
     BUSY = 8,
 
     /** Generic/unknown error */
