@@ -7,24 +7,23 @@
  *
  * Hardware:
  *   - Teensy 4.1
- *   - 2x Adafruit I2C Solenoid Driver (Product ID 6318)
- *   - I2C: SDA=Pin 18, SCL=Pin 19 (Wire)
- *   - Board 0 Address: 0x20 (channels 0-7)
- *   - Board 1 Address: 0x21 (channels 8-11)
+ *   - 5x Adafruit I2C Solenoid Driver (Product ID 6318)
+ *   - I2C: SDA=Pin 18, SCL=Pin 19 (Wire) @ 400kHz
+ *   - Board 0: 0x20 (A2=0,A1=0,A0=0) - Channels 0-7
+ *   - Board 1: 0x21 (A2=0,A1=0,A0=1) - Channels 8-15 (12-15 unused)
+ *   - Board 2: 0x22 (A2=0,A1=1,A0=0) - Channels 16-23
+ *   - Board 3: 0x23 (A2=0,A1=1,A0=1) - Channels 24-31
+ *   - Board 4: 0x24 (A2=1,A1=0,A0=0) - Channels 32-39
  *
- * MIDI Mapping (12 channels across 2 boards):
- *   - Note 24 (C1)  -> Board 0x20, Channel 0
- *   - Note 25 (C#1) -> Board 0x20, Channel 1
- *   - Note 26 (D1)  -> Board 0x20, Channel 2
- *   - Note 27 (D#1) -> Board 0x20, Channel 3
- *   - Note 28 (E1)  -> Board 0x20, Channel 4
- *   - Note 29 (F1)  -> Board 0x20, Channel 5
- *   - Note 30 (F#1) -> Board 0x20, Channel 6
- *   - Note 31 (G1)  -> Board 0x20, Channel 7
- *   - Note 32 (G#1) -> Board 0x21, Channel 0
- *   - Note 33 (A1)  -> Board 0x21, Channel 1
- *   - Note 34 (A#1) -> Board 0x21, Channel 2
- *   - Note 35 (B1)  -> Board 0x21, Channel 3
+ * MIDI Mapping (36 channels across 5 boards):
+ *   Range 1 - Notes 24-35 (C1-B1) -> Channels 0-11:
+ *     - Notes 24-31 -> Board 0x20, Channels 0-7
+ *     - Notes 32-35 -> Board 0x21, Channels 8-11
+ *   Gap - Notes 36-47 (C2-B2) -> Not mapped
+ *   Range 2 - Notes 48-71 (C3-B4) -> Channels 16-39:
+ *     - Notes 48-55 -> Board 0x22, Channels 16-23
+ *     - Notes 56-63 -> Board 0x23, Channels 24-31
+ *     - Notes 64-71 -> Board 0x24, Channels 32-39
  *
  * Serial Commands (for debugging):
  *   'x' - Emergency stop (all off)
@@ -33,7 +32,7 @@
  *
  * @author Mechanical MIDI Piano Project
  * @date 2025-01-18
- * @version 2.0.0
+ * @version 3.0.0
  */
 
 #include <Arduino.h>
@@ -53,13 +52,16 @@
 constexpr uint32_t I2C_CLOCK_SPEED = 400000;
 
 /** Number of MCP23017 boards */
-constexpr uint8_t MCP23017_BOARD_COUNT = 2;
+constexpr uint8_t MCP23017_BOARD_COUNT = 5;
 
 /** I2C addresses for MCP23017 boards
- *  Board 0: 0x20 (A0=A1=A2=0) - Channels 0-7
- *  Board 1: 0x21 (A0=1, A1=A2=0) - Channels 8-11
+ *  Board 0: 0x20 (A2=0, A1=0, A0=0) - Channels 0-7   (MIDI 24-31)
+ *  Board 1: 0x21 (A2=0, A1=0, A0=1) - Channels 8-15  (MIDI 32-35, 12-15 unused)
+ *  Board 2: 0x22 (A2=0, A1=1, A0=0) - Channels 16-23 (MIDI 48-55)
+ *  Board 3: 0x23 (A2=0, A1=1, A0=1) - Channels 24-31 (MIDI 56-63)
+ *  Board 4: 0x24 (A2=1, A1=0, A0=0) - Channels 32-39 (MIDI 64-71)
  */
-constexpr uint8_t MCP23017_ADDRESSES[MCP23017_BOARD_COUNT] = {0x20, 0x21};
+constexpr uint8_t MCP23017_ADDRESSES[MCP23017_BOARD_COUNT] = {0x20, 0x21, 0x22, 0x23, 0x24};
 
 /** @} */
 
@@ -69,7 +71,7 @@ constexpr uint8_t MCP23017_ADDRESSES[MCP23017_BOARD_COUNT] = {0x20, 0x21};
  */
 
 /** Total number of solenoid channels across all boards */
-constexpr uint8_t NUM_CHANNELS = 12;
+constexpr uint8_t NUM_CHANNELS = 40;
 
 /** @note Timing calculations use unsigned 32-bit subtraction which is safe
  *  across millis() overflow (wraps every ~49.7 days) due to C/C++ unsigned
@@ -95,16 +97,26 @@ constexpr uint32_t MIN_OFF_TIME_MS = 15;
  */
 
 /**
- * Lowest MIDI note that triggers a solenoid (C1)
- * Maps to solenoid channel 0 on board 0x20
+ * MIDI Range 1: Notes 24-35 (C1-B1) -> Channels 0-11
+ * This is the original octave, mapped linearly.
  */
-constexpr uint8_t MIDI_NOTE_LOW = 24;
+constexpr uint8_t MIDI_RANGE1_LOW = 24;
+constexpr uint8_t MIDI_RANGE1_HIGH = 35;
+constexpr uint8_t MIDI_RANGE1_CHANNEL_BASE = 0;
 
 /**
- * Highest MIDI note that triggers a solenoid (B1)
- * Maps to solenoid channel 3 on board 0x21 (global channel 11)
+ * MIDI Range 2: Notes 48-71 (C3-B4) -> Channels 16-39
+ * Two octaves added with expansion boards.
+ * Note: Channels 12-15 are unused (gap in channel allocation).
  */
-constexpr uint8_t MIDI_NOTE_HIGH = 35;
+constexpr uint8_t MIDI_RANGE2_LOW = 48;
+constexpr uint8_t MIDI_RANGE2_HIGH = 71;
+constexpr uint8_t MIDI_RANGE2_CHANNEL_BASE = 16;
+
+/**
+ * Gap in MIDI mapping: Notes 36-47 (C2-B2) are not mapped.
+ * These notes will be silently ignored.
+ */
 
 /** @} */
 
@@ -147,6 +159,7 @@ void printSeparator();
 void printHelp();
 void printStatus();
 void handleSerialInput();
+int8_t channelToNote(uint8_t channel);
 
 // =============================================================================
 // SETUP
@@ -191,11 +204,16 @@ void setup()
     usbMIDI.setHandleNoteOn(handleNoteOn);
     usbMIDI.setHandleNoteOff(handleNoteOff);
     Serial.println(F("[OK] MIDI handlers registered"));
-    Serial.print(F("  Listening for notes "));
-    Serial.print(MIDI_NOTE_LOW);
+    Serial.print(F("  Range 1: Notes "));
+    Serial.print(MIDI_RANGE1_LOW);
     Serial.print(F("-"));
-    Serial.print(MIDI_NOTE_HIGH);
-    Serial.println(F(" (C1-B1)"));
+    Serial.print(MIDI_RANGE1_HIGH);
+    Serial.println(F(" (C1-B1) -> Ch 0-11"));
+    Serial.print(F("  Range 2: Notes "));
+    Serial.print(MIDI_RANGE2_LOW);
+    Serial.print(F("-"));
+    Serial.print(MIDI_RANGE2_HIGH);
+    Serial.println(F(" (C3-B4) -> Ch 16-39"));
 
     // Print help menu
     Serial.println();
@@ -334,17 +352,64 @@ bool initMCP23017()
  * @brief Convert MIDI note number to solenoid channel
  *
  * @param note MIDI note number (0-127)
- * @return Channel number (0-11) if note is in range, -1 otherwise
+ * @return Channel number (0-39) if note is in a mapped range, -1 otherwise
  *
- * Maps notes 24-35 (C1 through B1) to channels 0-11.
+ * Mapping:
+ *   - Notes 24-35 (C1-B1)  -> Channels 0-11  (Range 1)
+ *   - Notes 36-47 (C2-B2)  -> -1 (unmapped gap)
+ *   - Notes 48-71 (C3-B4)  -> Channels 16-39 (Range 2)
  */
 int8_t noteToChannel(uint8_t note)
 {
-    if (note < MIDI_NOTE_LOW || note > MIDI_NOTE_HIGH)
+    // Range 1: Notes 24-35 -> Channels 0-11
+    if (note >= MIDI_RANGE1_LOW && note <= MIDI_RANGE1_HIGH)
+    {
+        return note - MIDI_RANGE1_LOW + MIDI_RANGE1_CHANNEL_BASE;
+    }
+
+    // Range 2: Notes 48-71 -> Channels 16-39
+    if (note >= MIDI_RANGE2_LOW && note <= MIDI_RANGE2_HIGH)
+    {
+        return note - MIDI_RANGE2_LOW + MIDI_RANGE2_CHANNEL_BASE;
+    }
+
+    // Note not in any mapped range (including gap 36-47)
+    return -1;
+}
+
+/**
+ * @brief Convert solenoid channel to MIDI note number
+ *
+ * @param channel Channel number (0-39)
+ * @return MIDI note number if channel is mapped, -1 otherwise
+ *
+ * Reverse mapping for status display:
+ *   - Channels 0-11  -> Notes 24-35 (C1-B1)
+ *   - Channels 12-15 -> -1 (unused channels on board 0x21)
+ *   - Channels 16-39 -> Notes 48-71 (C3-B4)
+ */
+int8_t channelToNote(uint8_t channel)
+{
+    // Range 1: Channels 0-11 -> Notes 24-35
+    if (channel <= 11)
+    {
+        return channel + MIDI_RANGE1_LOW;
+    }
+
+    // Unused channels 12-15 on board 0x21
+    if (channel <= 15)
     {
         return -1;
     }
-    return note - MIDI_NOTE_LOW;
+
+    // Range 2: Channels 16-39 -> Notes 48-71
+    if (channel <= 39)
+    {
+        return channel - MIDI_RANGE2_CHANNEL_BASE + MIDI_RANGE2_LOW;
+    }
+
+    // Channel out of range
+    return -1;
 }
 
 /**
@@ -470,7 +535,7 @@ void printHelp()
     Serial.println(F("  's' - Print status"));
     Serial.println(F("  'h' - Show this help menu"));
     Serial.println();
-    Serial.println(F("MIDI: Listening for notes 24-35 (C1-B1) on all channels"));
+    Serial.println(F("MIDI: Listening for notes 24-35 (C1-B1) and 48-71 (C3-B4)"));
     Serial.println();
     Serial.println(F("Ready for MIDI input..."));
 }
@@ -492,17 +557,39 @@ void printStatus()
         Serial.print(F("Boards: "));
         Serial.println(solenoidDriver.getBoardCount());
         Serial.print(F("Channels: "));
-        Serial.println(solenoidDriver.getChannelCount());
+        Serial.print(solenoidDriver.getChannelCount());
+        Serial.println(F(" (36 mapped, 4 unused)"));
 
         Serial.println(F("Channel states:"));
         for (uint8_t i = 0; i < NUM_CHANNELS; i++)
         {
+            // Print board header at board boundaries
+            if (i % 8 == 0)
+            {
+                Serial.print(F("  --- Board "));
+                Serial.print(i / 8);
+                Serial.print(F(" (0x"));
+                Serial.print(MCP23017_ADDRESSES[i / 8], HEX);
+                Serial.println(F(") ---"));
+            }
+
+            int8_t note = channelToNote(i);
             Serial.print(F("  Ch "));
+            if (i < 10) Serial.print(F(" "));  // Padding for alignment
             Serial.print(i);
-            Serial.print(F(" (Note "));
-            Serial.print(MIDI_NOTE_LOW + i);
-            Serial.print(F("): "));
-            Serial.println(solenoidDriver.isOn(i) ? F("ON") : F("off"));
+
+            if (note >= 0)
+            {
+                Serial.print(F(" (Note "));
+                if (note < 100) Serial.print(F(" "));  // Padding
+                Serial.print(note);
+                Serial.print(F("): "));
+                Serial.println(solenoidDriver.isOn(i) ? F("ON") : F("off"));
+            }
+            else
+            {
+                Serial.println(F(" (unused)"));
+            }
         }
     }
 
