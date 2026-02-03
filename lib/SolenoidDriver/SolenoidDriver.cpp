@@ -23,7 +23,6 @@ static const char STR_I2C_ERR[] PROGMEM = "I2C communication error";
 static const char STR_TIMEOUT[] PROGMEM = "Safety timeout";
 static const char STR_COOLDOWN[] PROGMEM = "Safety cooldown";
 static const char STR_DUTY[] PROGMEM = "Duty cycle exceeded";
-static const char STR_BUSY[] PROGMEM = "Busy";
 static const char STR_UNKNOWN[] PROGMEM = "Unknown error";
 
 // =============================================================================
@@ -43,6 +42,12 @@ SolenoidDriver::SolenoidDriver()
     for (uint8_t i = 0; i < SOLENOID_MAX_BOARDS_PER_BUS; i++) {
         _boardAddresses[i] = 0;
         _boardStates[i] = 0;
+    }
+
+    // Initialize all channel slots to a known, valid state. This ensures
+    // consistency even if begin() fails partway through board initialization.
+    for (uint8_t i = 0; i < SOLENOID_MAX_CHANNELS; i++) {
+        _channels[i] = SolenoidChannel(0, 0, i);
     }
 }
 
@@ -66,6 +71,11 @@ bool SolenoidDriver::begin(TwoWire& wire, uint8_t address) {
 bool SolenoidDriver::begin(TwoWire& wire, const uint8_t addresses[], uint8_t count) {
     // Validate parameters
     if (count == 0 || count > SOLENOID_MAX_BOARDS_PER_BUS) {
+        reportError(SolenoidError::INVALID_BOARD);
+        return false;
+    }
+
+    if (addresses == nullptr) {
         reportError(SolenoidError::INVALID_BOARD);
         return false;
     }
@@ -537,8 +547,6 @@ const char* SolenoidDriver::getErrorString(SolenoidError error) {
             return STR_COOLDOWN;
         case SolenoidError::DUTY_CYCLE_EXCEEDED:
             return STR_DUTY;
-        case SolenoidError::BUSY:
-            return STR_BUSY;
         default:
             return STR_UNKNOWN;
     }

@@ -91,7 +91,7 @@ public:
     /**
      * @brief Get the board index
      *
-     * @return Board index (0-15)
+     * @return Board index (0-7)
      */
     uint8_t boardIndex() const;
 
@@ -167,6 +167,10 @@ public:
      */
     void resetStats();
 
+private:
+    // Allow SolenoidDriver to call updateState()
+    friend class SolenoidDriver;
+
     /**
      * @brief Update the channel state (called internally by SolenoidDriver)
      *
@@ -180,9 +184,7 @@ public:
      * writing the state to hardware.
      */
     void updateState(bool isOn);
-
-private:
-    uint8_t _boardIndex;           ///< Board index (0-15)
+    uint8_t _boardIndex;           ///< Board index (0-7)
     uint8_t _channelIndex;         ///< Channel on board (0-7)
     uint8_t _globalIndex;          ///< Global channel index
     bool _isOn;                    ///< Current state

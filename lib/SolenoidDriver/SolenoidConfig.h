@@ -93,9 +93,6 @@ enum class SolenoidError : uint8_t {
     /** Safety: Duty cycle limit exceeded */
     DUTY_CYCLE_EXCEEDED = 7,
 
-    /** Reserved for future non-blocking operations */
-    BUSY = 8,
-
     /** Generic/unknown error */
     UNKNOWN = 255
 };
