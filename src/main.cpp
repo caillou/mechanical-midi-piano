@@ -7,19 +7,24 @@
  *
  * Hardware:
  *   - Teensy 4.1
- *   - Adafruit I2C Solenoid Driver (Product ID 6318)
+ *   - 2x Adafruit I2C Solenoid Driver (Product ID 6318)
  *   - I2C: SDA=Pin 18, SCL=Pin 19 (Wire)
- *   - Default I2C Address: 0x20
+ *   - Board 0 Address: 0x20 (channels 0-7)
+ *   - Board 1 Address: 0x21 (channels 8-11)
  *
- * MIDI Mapping:
- *   - Note 60 (C4)  -> Solenoid Channel 0
- *   - Note 61 (C#4) -> Solenoid Channel 1
- *   - Note 62 (D4)  -> Solenoid Channel 2
- *   - Note 63 (D#4) -> Solenoid Channel 3
- *   - Note 64 (E4)  -> Solenoid Channel 4
- *   - Note 65 (F4)  -> Solenoid Channel 5
- *   - Note 66 (F#4) -> Solenoid Channel 6
- *   - Note 67 (G4)  -> Solenoid Channel 7
+ * MIDI Mapping (12 channels across 2 boards):
+ *   - Note 24 (C1)  -> Board 0x20, Channel 0
+ *   - Note 25 (C#1) -> Board 0x20, Channel 1
+ *   - Note 26 (D1)  -> Board 0x20, Channel 2
+ *   - Note 27 (D#1) -> Board 0x20, Channel 3
+ *   - Note 28 (E1)  -> Board 0x20, Channel 4
+ *   - Note 29 (F1)  -> Board 0x20, Channel 5
+ *   - Note 30 (F#1) -> Board 0x20, Channel 6
+ *   - Note 31 (G1)  -> Board 0x20, Channel 7
+ *   - Note 32 (G#1) -> Board 0x21, Channel 0
+ *   - Note 33 (A1)  -> Board 0x21, Channel 1
+ *   - Note 34 (A#1) -> Board 0x21, Channel 2
+ *   - Note 35 (B1)  -> Board 0x21, Channel 3
  *
  * Serial Commands (for debugging):
  *   'x' - Emergency stop (all off)
@@ -47,8 +52,14 @@
 /** I2C bus speed in Hz (400kHz recommended for MCP23017) */
 constexpr uint32_t I2C_CLOCK_SPEED = 400000;
 
-/** Default I2C address for MCP23017 (A0=A1=A2=0) */
-constexpr uint8_t MCP23017_DEFAULT_ADDRESS = 0x20;
+/** Number of MCP23017 boards */
+constexpr uint8_t MCP23017_BOARD_COUNT = 2;
+
+/** I2C addresses for MCP23017 boards
+ *  Board 0: 0x20 (A0=A1=A2=0) - Channels 0-7
+ *  Board 1: 0x21 (A0=1, A1=A2=0) - Channels 8-11
+ */
+constexpr uint8_t MCP23017_ADDRESSES[MCP23017_BOARD_COUNT] = {0x20, 0x21};
 
 /** @} */
 
@@ -57,8 +68,8 @@ constexpr uint8_t MCP23017_DEFAULT_ADDRESS = 0x20;
  * @{
  */
 
-/** Number of solenoid channels on the driver board */
-constexpr uint8_t NUM_CHANNELS = 8;
+/** Total number of solenoid channels across all boards */
+constexpr uint8_t NUM_CHANNELS = 12;
 
 /** @note Timing calculations use unsigned 32-bit subtraction which is safe
  *  across millis() overflow (wraps every ~49.7 days) due to C/C++ unsigned
@@ -84,16 +95,16 @@ constexpr uint32_t MIN_OFF_TIME_MS = 15;
  */
 
 /**
- * Lowest MIDI note that triggers a solenoid (C4 = Middle C)
- * Maps to solenoid channel 0
+ * Lowest MIDI note that triggers a solenoid (C1)
+ * Maps to solenoid channel 0 on board 0x20
  */
-constexpr uint8_t MIDI_NOTE_LOW = 60;
+constexpr uint8_t MIDI_NOTE_LOW = 24;
 
 /**
- * Highest MIDI note that triggers a solenoid (G4)
- * Maps to solenoid channel 7
+ * Highest MIDI note that triggers a solenoid (B1)
+ * Maps to solenoid channel 3 on board 0x21 (global channel 11)
  */
-constexpr uint8_t MIDI_NOTE_HIGH = 67;
+constexpr uint8_t MIDI_NOTE_HIGH = 35;
 
 /** @} */
 
@@ -184,7 +195,7 @@ void setup()
     Serial.print(MIDI_NOTE_LOW);
     Serial.print(F("-"));
     Serial.print(MIDI_NOTE_HIGH);
-    Serial.println(F(" (C4-G4)"));
+    Serial.println(F(" (C1-B1)"));
 
     // Print help menu
     Serial.println();
@@ -265,19 +276,27 @@ void initI2C()
 }
 
 /**
- * @brief Initialize MCP23017 GPIO expander via SolenoidDriver
+ * @brief Initialize MCP23017 GPIO expanders via SolenoidDriver
  *
  * @return true if initialization successful, false otherwise
  *
  * Configures the SolenoidDriver with appropriate settings and initializes
- * the MCP23017 at the default address.
+ * all MCP23017 boards at their configured addresses.
  */
 bool initMCP23017()
 {
     Serial.println();
-    Serial.print(F("Initializing MCP23017 at address 0x"));
-    Serial.print(MCP23017_DEFAULT_ADDRESS, HEX);
-    Serial.println(F("..."));
+    Serial.print(F("Initializing "));
+    Serial.print(MCP23017_BOARD_COUNT);
+    Serial.println(F(" MCP23017 board(s)..."));
+
+    for (uint8_t i = 0; i < MCP23017_BOARD_COUNT; i++)
+    {
+        Serial.print(F("  Board "));
+        Serial.print(i);
+        Serial.print(F(": address 0x"));
+        Serial.println(MCP23017_ADDRESSES[i], HEX);
+    }
 
     // Configure the SolenoidDriver before initialization
     SolenoidConfig config;
@@ -289,8 +308,8 @@ bool initMCP23017()
     config.maxDutyCycle = 0.75f; // 75% maximum duty cycle for solenoid protection
     solenoidDriver.setConfig(config);
 
-    // Initialize with SolenoidDriver library
-    if (!solenoidDriver.begin(Wire, MCP23017_DEFAULT_ADDRESS))
+    // Initialize with SolenoidDriver library (multi-board variant)
+    if (!solenoidDriver.begin(Wire, MCP23017_ADDRESSES, MCP23017_BOARD_COUNT))
     {
         SolenoidError err = solenoidDriver.getLastError();
         Serial.print(F("[ERROR] SolenoidDriver init failed: "));
@@ -298,7 +317,11 @@ bool initMCP23017()
         return false;
     }
 
-    Serial.println(F("  SolenoidDriver initialized, all channels OFF"));
+    Serial.print(F("  SolenoidDriver initialized: "));
+    Serial.print(solenoidDriver.getBoardCount());
+    Serial.print(F(" board(s), "));
+    Serial.print(solenoidDriver.getChannelCount());
+    Serial.println(F(" channel(s), all OFF"));
 
     return true;
 }
@@ -311,9 +334,9 @@ bool initMCP23017()
  * @brief Convert MIDI note number to solenoid channel
  *
  * @param note MIDI note number (0-127)
- * @return Channel number (0-7) if note is in range, -1 otherwise
+ * @return Channel number (0-11) if note is in range, -1 otherwise
  *
- * Maps notes 60-67 (C4 through G4) to channels 0-7.
+ * Maps notes 24-35 (C1 through B1) to channels 0-11.
  */
 int8_t noteToChannel(uint8_t note)
 {
@@ -447,7 +470,7 @@ void printHelp()
     Serial.println(F("  's' - Print status"));
     Serial.println(F("  'h' - Show this help menu"));
     Serial.println();
-    Serial.println(F("MIDI: Listening for notes 60-67 (C4-G4) on all channels"));
+    Serial.println(F("MIDI: Listening for notes 24-35 (C1-B1) on all channels"));
     Serial.println();
     Serial.println(F("Ready for MIDI input..."));
 }
