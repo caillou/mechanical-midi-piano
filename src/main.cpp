@@ -79,9 +79,9 @@ constexpr uint8_t NUM_CHANNELS = 40;
 
 /**
  * Maximum solenoid on-time in milliseconds
- * Prevents coil overheating - 2 seconds is plenty for piano notes
+ * Prevents coil overheating - 5 seconds is plenty for piano notes
  */
-constexpr uint32_t MAX_ON_TIME_MS = 2000;
+constexpr uint32_t MAX_ON_TIME_MS = 5000;
 
 /**
  * Minimum off-time between activations in milliseconds
